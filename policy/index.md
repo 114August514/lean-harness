@@ -1,4 +1,4 @@
-# Lean Harness Policy Index
+# Lean Harness Policy 索引
 
 本文件是 Lean Harness policy 的常驻入口。
 
