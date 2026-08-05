@@ -105,8 +105,11 @@ description: 从可观察症状出发，以最低足够诊断深度解释并修�
 # Completion and stop conditions
 
 - 根因确认、修复完成、原始症状可验证：交棒给 `finish-work`；
-- 证据显示这不是一个 bug 而是需求或设计问题：经 `align-work` 确认后
-  转为相应类型的 work unit；
+- 证据显示这不是一个 bug：
+  - 只是当前目标内的技术设计或实现问题：主 Agent 自主重新分类为
+    implementation；
+  - 涉及需求、产品语义、验收或范围变化：经 `align-work` 确认后转为
+    相应类型的 work unit；
 - 合理深度内无法复现也无法取得有效观测：停止猜测式修改，记录已排除
   假设和剩余观测手段，交给 `finish-work` 判断（通常是 `BLOCKED` 或
   `HANDOFF`）；

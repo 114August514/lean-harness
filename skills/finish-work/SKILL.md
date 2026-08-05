@@ -48,7 +48,9 @@ verify
    → 进入 Review
 
    FAIL
-   → 构造 Remediation Package，委派修复
+   → 判断被反驳的 Claim 与 Intended outcome 的关系
+     · 表明实现、修复或 Acceptance 未满足 → bounded remediation
+     · 是 Investigation 对被测命题的有效反驳 → 作为调查结果进入 Review
 
    INSUFFICIENT
    → 补充 Evidence；当前环境无法补充时，记录缺口，
@@ -60,9 +62,11 @@ verify
    高风险工作无法获得 independent review 时，不得宣称 `DONE`，
    进入 `BLOCKED` 或 `HANDOFF`。
 
-   仅当工作为 C0 / D0 / I0 等极低风险、验证已充分、且实现者已完成
-   self-review 时，可以不再单独调用 `review-work`，但必须在最终判断中
-   如实记录 review 强度为 self-review，不得描述为更高强度的审查。
+   仅当整体风险极低、验证已充分、且实现者已完成 self-review 时，
+   可以不再单独调用 `review-work`，但必须在最终判断中如实记录
+   review 强度为 self-review，不得描述为更高强度的审查。
+   C0 / D0 / I0 本身不构成低风险判定——Review mode 必须依据整体
+   风险选择，例如 Incident + D0 仍属于高风险。
 
 3. **处理 Finding。** 每个 material Finding（BLOCKER / IMPORTANT）
    必须被以下方式之一处理：
