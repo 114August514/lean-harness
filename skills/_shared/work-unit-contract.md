@@ -51,16 +51,16 @@ Primary risks
 | Deliverable | 交付物的具体形态：代码变化、文档、诊断结论、评估报告等 |
 | Acceptance criteria | 判断 Intended outcome 是否成立的检查条件 |
 | Acceptance mode | `objective` / `subjective` / `mixed`，见下文 |
-
-`Acceptance criteria` 的客观部分应被拆解为具体 Claims；
-`verify-work` 的验证对象统一为 Claims，`Acceptance criteria` 仅用于
-总体验收层面的汇总判断。
 | Scope | 允许触碰的边界：文件、模块、系统、数据 |
 | Non-goals | 明确不在本次范围内的内容，防止扩张 |
 | Constraints | 不可违反的限制：兼容义务、性能上限、禁止事项 |
 | Assumptions | 尚未证实但按其为真推进的前提；每条假设都应可被验证推翻 |
 | Claims | 关键的可验证陈述，是 `verify-work` 的验证对象 |
 | Primary risks | 最可能让结果无效或造成损失的两三个风险 |
+
+`Acceptance criteria` 的客观部分应被拆解为具体 Claims；
+`verify-work` 的验证对象统一为 Claims，`Acceptance criteria` 仅用于
+总体验收层面的汇总判断。
 
 ### Claims
 

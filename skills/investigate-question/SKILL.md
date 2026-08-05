@@ -55,11 +55,11 @@ description: 通过探索、比较、实验、benchmark、prototype 或分析减
         需要更强方法、复现或 validity 控制
    ```
 
-   两个维度自由组合：一次 Explore 可以是 I0 快速扫面，也可以是 I2 级别的
+   两个维度自由组合：一次 Explore 可以是 I0 快速扫描，也可以是 I2 级别的
    系统性调研。
 
 2. **按 Intent 组织调查。**
-   - Explore：扫面、采样、构造最小探针。可以输出候选方向和下一步，
+   - Explore：扫描、采样、构造最小探针。可以输出候选方向和下一步，
      不欠一个最终答案；
    - Evaluate：固定比较基准和对照条件，用同一 Evidence standard
      对待每个候选；
@@ -95,7 +95,7 @@ description: 通过探索、比较、实验、benchmark、prototype 或分析减
 
 # Delegation
 
-- 扫面、数据收集、单个候选项的测量适合委派给 worker，工作包写明
+- 扫描、数据收集、单个候选项的测量适合委派给 worker，工作包写明
   Questions、Search space 边界和 Evidence standard；
 - 多个候选的并行评估可以分给不同 worker，但比较基准由主 Agent 统一给定，
   保证结果可比；
