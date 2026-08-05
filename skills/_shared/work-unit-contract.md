@@ -161,7 +161,7 @@ Investigation level
 | --- | --- |
 | Intent | `Explore` / `Evaluate` / `Test`，见 `investigate-question` |
 | Question or exploration objective | 要回答的问题或要探索的目标 |
-| Decision supported | 本次调查支撑什么后续决定 |
+| Decision supported | 本次调查支撑的后续决定（存在具体决定时填写，否则可省略） |
 | Search space | 考虑的候选范围及其边界 |
 | Baseline or comparison frame | 比较基准或对照系，Evaluate / Test 通常必填 |
 | Evidence standard | 结论需要达到的证据强度 |

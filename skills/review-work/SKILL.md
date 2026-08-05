@@ -5,7 +5,7 @@ description: 从实现者之外的审查视角检查工作结果，按风险选�
 
 # Purpose
 
-从实现者之外的审查视角检查工作结果，发现验证难以覆盖的问题：
+以与实现过程分离的审查视角检查工作结果，发现验证难以覆盖的问题：
 结构错位、设计风险、推理漏洞、与目标脱节。
 
 `review-work` 只负责审查和输出 Finding。它不修改工件、不执行 remediation、
@@ -73,12 +73,16 @@ description: 从实现者之外的审查视角检查工作结果，按风险选�
    公共或外部契约；生产或共享状态；关键并发或分布式行为；
    支撑高代价决定的 Investigation。
 
-   模式不可用时如实降级并标注：
+   模式不可用时，将保障缺失本身作为 Finding 输出：
 
-   - 高风险工作无法获得 independent review：不得静默宣称通过，
-     在输出中明确标记，由 `finish-work` 判断 `BLOCKED` 或 `HANDOFF`；
+   - 高风险工作无法获得 independent review：输出 `FINDINGS`，包含
+     `BLOCKER: required review assurance unavailable`，由 `finish-work`
+     判断 `BLOCKED` 或 `HANDOFF`；
    - 普通工作无法获得 fresh context：进行明确标记的 self-review，
-     并加强客观验证；不得将其描述为 independent review。
+     并加强客观验证；不得将其描述为 independent review；
+   - 审查材料不足以支撑判断：输出 `FINDINGS`，包含
+     `IMPORTANT` 或 `BLOCKER: insufficient review material`，
+     说明缺口，不猜测下结论。
 
 3. **执行审查。** 围绕 axes 检查审查材料。审查依据是契约和材料本身，
    不是实现者的解释——实现叙事会引导审查者重走实现者的盲区。
@@ -135,8 +139,7 @@ Required outcome / Scope impact）
 
 - 审查覆盖全部相关 axes 并输出结论：结束；
 - Finding 已写明 Required outcome 即视为表达完整，不附带修复实现；
-- 审查中发现材料不足以支撑判断：说明缺口并交回主 Agent，
-  不猜测下结论。
+- 材料不足或模式不可用等保障缺失已通过 Finding 表达：结束。
 
 # Related policy and references
 

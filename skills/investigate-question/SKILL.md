@@ -23,15 +23,16 @@ description: 通过探索、比较、实验、benchmark、prototype 或分析减
 - 目标已经是交付持久变化——用 `implement-change`（prototype 若需长期保留
   也属于它）；
 - 目标是解释并修复异常行为——用 `debug-problem`；
-- 问题没有决策用途，只是"想了解一下"——先明确 Decision supported，
-  否则调查结果无法判断完成。
+- 没有明确的问题或探索目标，也没有完成边界——先收敛出可判断完成的
+  调查目标，否则结果无法评审。
 
 # Inputs
 
 - Work Unit Contract（含 Investigation extension：Intent、
-  Question or exploration objective、Decision supported、Search space、
+  Question or exploration objective、Search space、
   Baseline or comparison frame、Evidence standard、Validity threats、
-  Exit criteria、Investigation level）；
+  Exit criteria、Investigation level；存在具体决定时记录
+  Decision supported）；
 - 相关代码、文档、数据和既有结论。
 
 # Process

@@ -20,9 +20,7 @@ description: 从可观察症状出发，以最低足够诊断深度解释并修�
 # Do not use when
 
 - 没有异常症状，只是要实现新行为——用 `implement-change`；
-- 目标是评估方案或回答开放问题——用 `investigate-question`；
-- 症状根因和修复都已明确，只剩执行修改——直接按 `implement-change`
-  的实现路径处理，不要套用诊断仪式。
+- 目标是评估方案或回答开放问题——用 `investigate-question`。
 
 # Inputs
 

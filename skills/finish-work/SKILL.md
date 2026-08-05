@@ -27,14 +27,15 @@ verify
 
 # Do not use when
 
-- 候选结果尚未形成——回到相应执行 Skill；
+- 候选结果尚未形成，且仍有安全工作可以继续——回到相应执行 Skill；
 - 只需要一次验证或一次 review 的中间判断——直接用 `verify-work`
   或 `review-work`，不经过完整编排。
 
 # Inputs
 
 - Work Unit Contract 及其 Claims、Acceptance criteria、Acceptance mode；
-- 候选结果及 Changes 摘要；
+- 候选结果及 Changes 摘要（输出 `DONE` 时必需；输出 `BLOCKED` 或
+  `HANDOFF` 时可为空）；
 - 执行阶段已有的验证和审查记录。
 
 # Process
@@ -90,16 +91,10 @@ verify
    Required verification 修复后必须重新验证的内容
    ```
 
-   字段对应关系：`Reason` 写入 `Fixed facts` 作为修复背景；
-   `Required outcome` 对应 `Goal` 与 `Expected output`；
-   `Allowed scope` 对应 `Scope`、`Allowed actions` 与
-   `Forbidden scope expansion`；`Affected claims` 不写入 `Fixed facts`，
-   直接作为 `Required verification` 的输入；`Required verification` 同名保留。
-
-   委派修复时按修复性质选择执行路径：代码改动按 `implement-change`、
-   异常行为修复按 `debug-problem`、结论或数据修正按 `investigate-question`，
-   并要求 worker 返回符合 Result Envelope 的 `Changes`、`Verification`、
-   `Evidence` 与 `Unresolved`。
+   Remediation worker 属于当前完成循环，不启动嵌套的 `finish-work`，
+   也不默认创建新 work unit。它使用 `implement-change`、`debug-problem`
+   或 `investigate-question` 的方法作为指导，直接把结果返回当前
+   `finish-work`。只有范围已经变成独立目标时，才正式创建新 work unit。
 
 5. **Reverify。** 修复返回后：
 
