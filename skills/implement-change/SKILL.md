@@ -120,7 +120,8 @@ description: 实现有边界的持久变化：feature、refactor、migration、�
 - 发现的工作属于独立目标：创建新 work unit 或记录后移交，不在当前
   work unit 内扩张；
 - 结构判断反复变动、无法收敛：停止实现，把设计分叉带回主 Agent
-  重新判断，必要时经 `align-work` 对齐，而不是继续 patch。
+  重新判断，必要时经 `align-work` 对齐；无法继续时交给 `finish-work`
+  判断（`BLOCKED` 或 `HANDOFF`），而不是继续 patch。
 
 # Related policy and references
 

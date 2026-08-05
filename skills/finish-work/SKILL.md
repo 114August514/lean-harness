@@ -74,49 +74,29 @@ verify
    转交为明确的 HANDOFF
    ```
 
+   例外：`BLOCKER: required review assurance unavailable` 不得以
+   "接受风险"方式处理，必须输出 `BLOCKED` 或 `HANDOFF`。
+
    OPTIONAL 默认不扩大当前范围，记录即可。范围变化按 Finding 的
    Scope impact 处理：同目标受控则自主整合；改变目标或验收则
    `align-work`；独立目标则新 work unit 或 `HANDOFF`。
 
 4. **构造 Remediation Package。** 所有修复都以对
    `skills/_shared/delegation-contract.md` Work Package 特化的形式委派，
-   在通用字段之上固定：
-
-   ```text
-   Reason               Claim failed / Acceptance failed /
-                        Evidence insufficient / Review finding
-   Required outcome     什么结果出现算修复完成
-   Allowed scope        允许修改的范围
-   Affected claims      受影响的 Claims
-   Required verification 修复后必须重新验证的内容
-   ```
+   字段和规则以 `skills/_shared/work-lifecycle.md` 的"必要规则"为准。
 
    Remediation worker 属于当前完成循环，不启动嵌套的 `finish-work`，
    也不默认创建新 work unit。它使用 `implement-change`、`debug-problem`
    或 `investigate-question` 的方法作为指导，直接把结果返回当前
    `finish-work`。只有范围已经变成独立目标时，才正式创建新 work unit。
 
-5. **Reverify。** 修复返回后：
+5. **Reverify。** 修复返回后，识别受影响 Claims、使相关旧 Evidence
+   失效、重新验证这些 Claims（规则见
+   `skills/_shared/work-lifecycle.md`）。能说明修改与某 Claim 无关时，
+   其旧 Evidence 继续有效。不机械重跑全部检查。
 
-   ```text
-   识别受影响 Claims
-   → 使相关旧 Evidence 失效
-   → 重新验证这些 Claims
-   ```
-
-   能说明修改与某 Claim 无关时，其旧 Evidence 继续有效。
-   不机械重跑全部检查。
-
-6. **Targeted re-review。** 重新验证通过后进行，至少覆盖：
-
-   ```text
-   修复内容
-   直接消费者
-   受影响 Claims
-   相关 Review axes
-   因修改而失效的先前结论
-   ```
-
+6. **Targeted re-review。** 重新验证通过后进行，覆盖范围以
+   `skills/_shared/work-lifecycle.md` 的最低覆盖为准。
    输出仍是 `PASS` / `FINDINGS`。
 
 7. **判断循环。** 同一 material Finding 反复修复仍无实质进展，
@@ -142,32 +122,29 @@ verify
 
    等待确认前应先完成所有仍可独立、安全完成的客观工作。
 
-9. **输出最终状态。** 只输出三个之一，语义以
-   `policy/working-contract.md` 的"完成语义"为准：
+9. **输出最终状态。** 只输出三个之一：
 
    #### DONE
 
-   只有同时满足：
+   语义以 `policy/working-contract.md` 的"完成语义"为准。在满足
+   policy 定义的基础上，还要求本 Skill 编排的以下条件同时成立：
 
    ```text
-   Intended outcome 已实现
-   Acceptance criteria 已满足
    必要的人类验收已完成
    关键 Evidence 对当前工件有效
    BLOCKER 和 IMPORTANT 已合法处理
    Review 强度与风险匹配
-   不存在明显临时结构或未完成的重要行为
    ```
 
    #### BLOCKED
 
-   仅当继续产生有效进展必须依赖缺失信息、权限、人类语义决定、
-   外部环境或必要的高风险 Review，并且没有独立、安全的工作可以继续。
+   语义和判定以 `policy/working-contract.md` 的"完成语义"和
+   `policy/decision-boundaries.md` 的"BLOCKED 判定"为准。
    执行 Skill 不直接宣称 `BLOCKED`，而是把未解决依赖交给本 Skill 判断。
 
    #### HANDOFF
 
-   当前约定阶段已完成，后续工作由其他 owner、环境或 work unit 接手。
+   语义以 `policy/working-contract.md` 的"完成语义"为准。
    最小 HANDOFF 内容：
 
    ```text
