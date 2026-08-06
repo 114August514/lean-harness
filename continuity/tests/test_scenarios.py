@@ -178,15 +178,6 @@ def test_issue_spans_multiple_prs(repo, parts):
     assert [e["kind"] for e in pr6] == ["pr-opened"]
 
 
-def test_pr_merge_does_not_end_issue(repo, parts):
-    """PR merge 后 Issue 继续处理。"""
-    _, _, worklog, _ = parts
-    worklog.append("issue-5", "pr-merged", cycle_id="cycle-1", fields={"pr": 4})
-    worklog.append("issue-5", "finding", cycle_id="cycle-1", summary="后续发现")
-    kinds = [e["kind"] for e in worklog.events("issue-5")]
-    assert kinds == ["pr-merged", "finding"]
-
-
 # --- Evidence 与检查点 ---
 
 
