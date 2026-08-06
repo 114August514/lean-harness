@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 from continuity.errors import SharedStoreError
-from continuity.shared import assert_same_event, validate_event
+from continuity.worklog.events import logical_events
 
 
 class FakeSharedStore:
@@ -23,19 +23,7 @@ class FakeSharedStore:
         self._lose_once.add(event_id)
 
     def append_event(self, work: str, event: dict[str, Any]) -> dict[str, Any]:
-        validate_event(event, expected_work=work)
         with self._lock:
-            existing = next(
-                (
-                    item
-                    for item in self._events[work]
-                    if item["event_id"] == event["event_id"]
-                ),
-                None,
-            )
-            if existing is not None:
-                assert_same_event(event, existing)
-                return copy.deepcopy(existing)
             stored = copy.deepcopy(event)
             stored["remote"] = {
                 "comment_id": self._next_comment_id,
@@ -52,18 +40,22 @@ class FakeSharedStore:
 
     def list_events(self, work: str) -> list[dict[str, Any]]:
         with self._lock:
-            return copy.deepcopy(self._events[work])
+            physical = copy.deepcopy(self._events[work])
+        return logical_events(physical)
 
     def find_event(self, work: str, event_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            event = next(
-                (item for item in self._events[work] if item["event_id"] == event_id),
-                None,
-            )
-            return copy.deepcopy(event)
+        return next(
+            (item for item in self.list_events(work) if item["event_id"] == event_id),
+            None,
+        )
+
+
+class FakeProjectFacts:
+    """Deterministic Issue and PR facts, independent of shared-log storage."""
 
     def get_work_item(self, work: str) -> dict[str, Any]:
         return {
+            "availability": "present",
             "work": work,
             "number": int(work.removeprefix("issue-")),
             "title": "Continuity work unit",

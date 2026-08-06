@@ -15,11 +15,22 @@ Agent 的常驻入口与按需阅读导航见 [`index.md`](index.md)，权威完
 共享事件不会写入 checkout，也不属于某个 branch、worktree 或 PR。Recovery Log
 只属于当前 clone 和 worktree，不会进入 Git，也不会冒充跨协作者同步。
 
+实现按真实依赖区分读写：`WorkEventReader` 只读取和组合共享事实；
+`WorkEventPublisher` 必须持有当前 `RecoveryLog`，负责受 `begin / end` 保护的远端
+发布与 response-loss reconciliation。Rotation 由薄协调函数读取共享/Git facts，再
+调用 Recovery 推进本地边界。
+
 目录布局：
 
 ```text
 continuity/
-├── continuity/   # Python implementation package
+├── continuity/
+│   ├── recovery/  # local journal、storage、rotation
+│   ├── worklog/   # event identity、reader、publication
+│   ├── artifacts/ # Git 与 Project facts ports
+│   ├── github.py  # 同时实现两个窄 port 的 GitHub adapter
+│   ├── context.py
+│   └── cli.py
 ├── tests/        # scenario and unit tests
 ├── index.md      # Agent entry and progressive-disclosure routing
 ├── contract.md
@@ -42,8 +53,9 @@ uv run python -m continuity resume --work issue-5 --cycle cycle-1
 ```
 
 uv 只管理 Python 版本、测试和 lint 工具；本 module 不是可安装 package，不使用
-build backend，也不会生成 `.egg-info`。远端操作默认从 `origin` 推导 `owner/name`，也可用全局
-`--repository owner/name` 显式指定。
+build backend，也不会生成 `.egg-info`。实现不引入全局 config 或 DI container；
+远端操作默认从 `origin` 推导 `owner/name`，也可用全局 `--repository owner/name`
+显式指定。
 
 ### 发布共享事件
 

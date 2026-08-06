@@ -5,9 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from continuity import ContextReconstructor, RecoveryLog, WorkEvents
+from continuity import (
+    ContextReconstructor,
+    RecoveryLog,
+    WorkEventPublisher,
+    WorkEventReader,
+)
 
-from .fakes import FakeSharedStore
+from .fakes import FakeProjectFacts, FakeSharedStore
 
 
 def git(repo: Path, *arguments: str) -> str:
@@ -39,12 +44,37 @@ def repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def system(repo: Path):
-    shared = FakeSharedStore()
-    recovery = RecoveryLog(repo)
-    events = WorkEvents(repo, shared, recovery)
-    context = ContextReconstructor(repo, events, recovery, project_facts=shared)
-    return shared, recovery, events, context
+def shared() -> FakeSharedStore:
+    return FakeSharedStore()
+
+
+@pytest.fixture
+def project_facts() -> FakeProjectFacts:
+    return FakeProjectFacts()
+
+
+@pytest.fixture
+def recovery(repo: Path) -> RecoveryLog:
+    return RecoveryLog(repo)
+
+
+@pytest.fixture
+def reader(repo: Path, shared: FakeSharedStore) -> WorkEventReader:
+    return WorkEventReader(repo, shared)
+
+
+@pytest.fixture
+def publisher(reader: WorkEventReader, recovery: RecoveryLog) -> WorkEventPublisher:
+    return WorkEventPublisher(reader, recovery)
+
+
+@pytest.fixture
+def context(
+    reader: WorkEventReader,
+    project_facts: FakeProjectFacts,
+    recovery: RecoveryLog,
+) -> ContextReconstructor:
+    return ContextReconstructor(reader, project_facts=project_facts, recovery=recovery)
 
 
 def commit_file(repo: Path, name: str, content: str, message: str) -> str:

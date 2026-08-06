@@ -1,28 +1,42 @@
 """Lean Harness work-continuity reference implementation."""
 
+from .artifacts import ProjectFactsSource
 from .context import ContextReconstructor
 from .errors import (
+    BindingMismatchError,
+    CheckpointConflictError,
+    CheckpointError,
     ContinuityError,
+    DamagedJournalError,
     DamagedStateError,
+    EventIdentityConflict,
     EventValidationError,
     GitFactError,
     RecoveryError,
     SharedStoreError,
 )
-from .events import WorkEvents
-from .recovery import RecoveryLog
-from .shared import GitHubIssueSharedStore, SharedWorkLogStore
+from .github import GitHubAdapter
+from .recovery import RecoveryLog, rotate_recovery
+from .worklog import SharedWorkLogStore, WorkEventPublisher, WorkEventReader
 
 __all__ = [
+    "BindingMismatchError",
+    "CheckpointConflictError",
+    "CheckpointError",
     "ContextReconstructor",
     "ContinuityError",
+    "DamagedJournalError",
     "DamagedStateError",
+    "EventIdentityConflict",
     "EventValidationError",
     "GitFactError",
-    "GitHubIssueSharedStore",
+    "GitHubAdapter",
+    "ProjectFactsSource",
     "RecoveryError",
     "RecoveryLog",
     "SharedStoreError",
     "SharedWorkLogStore",
-    "WorkEvents",
+    "WorkEventPublisher",
+    "WorkEventReader",
+    "rotate_recovery",
 ]

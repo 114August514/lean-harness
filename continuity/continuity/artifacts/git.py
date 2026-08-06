@@ -1,36 +1,45 @@
-"""Structured Git facts used during recovery and checkpoint validation."""
+"""Structured Git facts used for recovery and checkpoint validation."""
 
 from __future__ import annotations
 
 import os
-import re
 import subprocess
-import uuid
 from pathlib import Path
 from typing import Any
 
-from .errors import DamagedStateError, GitFactError
-from .storage import atomic_write_json, read_json
+from ..errors import GitFactError
 
 _CONFLICT_CODES = {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}
-_WORKTREE_ID = re.compile(r"^wt-[0-9a-f]{32}$")
 
 
-def run_git(
+def _run_git(
     repo: Path, *arguments: str, text: bool = True
 ) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(Path(repo).resolve()), *arguments],
-        capture_output=True,
-        text=text,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            ["git", "-C", str(Path(repo).resolve()), *arguments],
+            capture_output=True,
+            text=text,
+            check=False,
+        )
+    except OSError as error:
+        raise GitFactError(f"cannot execute Git: {error}") from error
+
+
+def _raise_git_failure(operation: str, result: subprocess.CompletedProcess) -> None:
+    stderr = result.stderr
+    if isinstance(stderr, bytes):
+        detail = os.fsdecode(stderr).strip()
+    else:
+        detail = (stderr or "").strip()
+    suffix = f": {detail}" if detail else ""
+    raise GitFactError(f"Git could not {operation}{suffix}")
 
 
 def _required_git_path(repo: Path, argument: str) -> Path:
-    result = run_git(repo, "rev-parse", argument)
+    result = _run_git(repo, "rev-parse", argument)
     if result.returncode != 0:
-        raise GitFactError(f"not a Git worktree: {Path(repo).resolve()}")
+        _raise_git_failure(f"read {argument}", result)
     value = Path(result.stdout.strip())
     return (
         (Path(repo).resolve() / value).resolve() if not value.is_absolute() else value
@@ -45,59 +54,64 @@ def git_dir(repo: Path) -> Path:
     return _required_git_path(repo, "--git-dir")
 
 
-def worktree_id(repo: Path) -> str:
-    """Return a persisted identity attached to this worktree's Git metadata."""
+def origin_url(repo: Path) -> str | None:
+    result = _run_git(repo, "config", "--get", "remote.origin.url")
+    if result.returncode == 0:
+        return result.stdout.strip() or None
+    if result.returncode == 1:
+        return None
+    _raise_git_failure("read remote.origin.url", result)
 
-    identity_path = git_dir(repo) / "lean-harness" / "worktree.json"
-    current = read_json(identity_path)
-    if current is not None:
-        identity = current.get("worktree_id")
-        if not isinstance(identity, str) or not _WORKTREE_ID.fullmatch(identity):
-            raise DamagedStateError(
-                f"damaged worktree identity at {identity_path}: invalid worktree_id"
-            )
-        return identity
 
-    identity = f"wt-{uuid.uuid4().hex}"
-    atomic_write_json(identity_path, {"schema_version": 1, "worktree_id": identity})
-    return identity
+def _find_commit(repo: Path, revision: str) -> str | None:
+    result = _run_git(
+        repo, "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    if result.returncode == 1:
+        return None
+    _raise_git_failure(f"resolve commit {revision}", result)
 
 
 def head_commit(repo: Path) -> str | None:
-    result = run_git(repo, "rev-parse", "--verify", "HEAD")
-    return result.stdout.strip() if result.returncode == 0 else None
+    return _find_commit(repo, "HEAD")
 
 
 def current_branch(repo: Path) -> str | None:
-    result = run_git(repo, "branch", "--show-current")
+    result = _run_git(repo, "branch", "--show-current")
+    if result.returncode != 0:
+        _raise_git_failure("read the current branch", result)
     branch = result.stdout.strip()
     return branch or None
 
 
 def resolve_commit(repo: Path, revision: str) -> str:
-    result = run_git(repo, "rev-parse", "--verify", f"{revision}^{{commit}}")
-    if result.returncode != 0:
+    commit = _find_commit(repo, revision)
+    if commit is None:
         raise GitFactError(f"cannot resolve commit: {revision}")
-    return result.stdout.strip()
+    return commit
 
 
 def commit_exists(repo: Path, commit: str) -> bool:
-    result = run_git(repo, "cat-file", "-e", f"{commit}^{{commit}}")
-    return result.returncode == 0
+    return _find_commit(repo, commit) is not None
 
 
 def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
-    result = run_git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
-    return result.returncode == 0
+    result = _run_git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    _raise_git_failure(f"compare commits {ancestor} and {descendant}", result)
 
 
 def structured_status(repo: Path) -> list[dict[str, Any]]:
-    """Parse ``git status --porcelain=v1 -z`` without losing path information."""
+    """Parse ``git status --porcelain=v1 -z`` without losing path facts."""
 
-    result = run_git(repo, "status", "--porcelain=v1", "-z", text=False)
+    result = _run_git(repo, "status", "--porcelain=v1", "-z", text=False)
     if result.returncode != 0:
-        stderr = os.fsdecode(result.stderr).strip()
-        raise GitFactError(f"cannot read Git status: {stderr}")
+        _raise_git_failure("read Git status", result)
 
     fields = result.stdout.split(b"\0")
     changes: list[dict[str, Any]] = []

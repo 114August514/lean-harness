@@ -30,6 +30,7 @@ PR
 - 普通本地工作只记录 `intent`。
 - 结果不透明、不可安全重复或可能部分成功的操作使用 `begin / end`。
 - `begin` 无 `end` 表示结果未知；重试前必须查询真实目标状态。
+- 相同 event identity 的物理重复只算一个逻辑事件；不同 payload 必须报冲突。
 - Git commit 不自动成为 checkpoint。
 - 只有显式发布的 coherent checkpoint event 才形成连续性边界。
 - 正式决定不能只存在于 Work Log，必须提升到 Issue / Spec / Policy / PR。

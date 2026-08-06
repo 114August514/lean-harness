@@ -22,6 +22,13 @@
 
 这些判断仍由相应 Skill 和人类完成。
 
+参考实现由五个能力群组成：Local Recovery、Project-shared Work Log、Artifact
+Facts、Context Reconstruction 和 Observable Interface。Artifact Facts 覆盖 Issue /
+Spec、repository/worktree、Git 工件、PR、Review 与 Checks 的当前事实。
+
+identity、canonical encoding、domain errors、atomic local storage 和 external command
+execution 是支撑这些能力的横切机制，不构成额外领域层或通用基础设施系统。
+
 ## 三层事实模型
 
 ```text
@@ -153,6 +160,11 @@ append-only recovery journal 的最后一条半写记录可以截断；中间损
 读取尾部、判断 repair offset 和执行 truncate 必须处于同一互斥区间，repair 不得
 依据加锁前的旧快照删除并发 writer 已经完成的记录。
 
+首次创建 journal 时必须同步其目录项。bind、begin/end、release、rebind 和 rotation
+这类“读取不变量再更新”的复合操作必须使用同一 worktree-local 文件锁；不支持所需
+锁语义的本地文件系统必须报错，不能静默降级。该锁只保护一个 clone/worktree 的
+Recovery，不是 distributed lock。
+
 ## Project-shared Work Log
 
 ### GitHub Issue comment 是参考实现
@@ -184,6 +196,11 @@ artifact identity when relevant
 references / resolves when relevant
 ```
 
+`checkpoint-created`、`checkpoint-remapped`、`event-resolved`、
+`verification-observed` 和 `work-reopened` 是具有专用领域不变量的结构性 kind，必须
+通过对应操作形成。普通 significant event 的 kind 不由 continuity 建立封闭枚举；
+Skills / owner 判断其意义和是否值得发布，continuity 只要求它具有合法的基础结构。
+
 示例：
 
 ```json
@@ -214,6 +231,12 @@ find_event(work, event_id)
 - GitHub Issue shared store；
 - deterministic fake shared store for tests。
 
+port 的输入是领域层已经验证的 canonical event；实现必须在远端数据进入进程时验证
+marker、payload、partition 和 provider response，并只向领域层返回已验证事件。同一
+对象在进程内调用链中不重复验证；从 remote 或 Recovery Log 重新载入时必须重新验证。
+`list_events` 和 `find_event` 返回已经按 event identity 逻辑去重、并完成冲突检测的
+事件；上层 reader 信任该 port，不重复执行同一投影。
+
 不得把该 port 演化为 provider registry、transport framework、后台 daemon、独立
 数据库、Event Store 或 Event Bus。
 
@@ -225,6 +248,13 @@ find_event(work, event_id)
 相同 `event_id` 与相同 canonical payload 表示幂等重复；相同 `event_id` 与不同
 payload 表示身份冲突，必须产生可诊断错误。append confirmation 和 response-loss
 reconciliation 都必须比较预期事件与远端事件，不能只确认 identity 存在。
+
+canonical payload 是事件的全部持久字段，但不包括 provider `remote` observation。
+事件必须只包含 JSON-native 值；身份一致性通过完整 canonical payload 比较，而不是
+额外的派生 digest。并发 writer 可能产生多个物理 comment，因此不承诺 distributed
+exactly-once。相同 identity/payload 的物理 comment 在读取时折叠为第一次出现位置上
+的一个逻辑事件；不同 payload 的同 ID 使整个 lookup 失败，不得任选其一，也不得为
+未知 publication 补写成功 `end`。
 
 展示和 checkpoint 后增量读取使用共享 comment 返回顺序；因果关系使用稳定引用。
 解决关系必须写成：
@@ -266,8 +296,10 @@ replacement 发现 begin 无 end
 → 不存在：保持 absent，只有显式授权后才重试
 ```
 
-不需要通用 retry framework。GitHub store 自身按 event_id 查重；fake store 必须能
-模拟“远端已 append、调用方收到 response loss”。
+不需要通用 retry framework。publication coordinator 在写前查询并在写后确认；
+GitHub comment API 不提供 event identity 的原子唯一性。GitHub adapter 与 fake store
+都必须在读取时执行逻辑去重和冲突检测，fake 还必须能模拟“远端已 append、调用方
+收到 response loss”。
 
 ## Checkpoint、rotation 与历史改写
 
@@ -322,6 +354,10 @@ reason
 解析从 checkpoint identity 开始沿 append-only remap chain 前进。fresh clone 必须
 仅凭 Git 和共享日志解析到新 commit。
 
+同一 checkpoint 与 `old_commit` 可以有多条指向相同 `new_commit` 的物理/逻辑记录；
+若它们指向不同新 commit，则映射已经分叉，必须报告 conflict，不得依赖 comment
+顺序任选一条。
+
 ## Context Reconstruction
 
 Context Reconstruction 只收集和组合：
@@ -345,13 +381,15 @@ conflict
 ```
 
 显式 `resume --work X --cycle Y` 与活跃/暂停的本地 binding 不一致时必须拒绝。
-调用方可显式请求 `shared_only`，此时只加载共享与 Git 上下文，不创建
-`RecoveryLog`、不读取本地 state、不创建 worktree identity，也不从本地 binding
-推导 work / cycle。shared-only resume 至少需要显式 work。
+CLI 调用方可显式请求 `shared_only`；Python API 通过不提供 `RecoveryLog` 表达同一
+模式。此时只加载共享与 Git 上下文，不创建 Recovery、不读取本地 state、不创建
+worktree identity，也不从本地 binding 推导 work / cycle。shared-only resume 至少
+需要显式 work。
 
-PR facts 必须区分 `present`、`absent`、`unavailable` 和解析 `error`。最低读取范围
-只包括恢复所需的 PR identity/state、base/head、head SHA、merge state、review
-decision 和当前 checks 摘要；不复制完整 review comments、check logs 或 PR 时间线。
+Issue / Spec 和 PR facts 都必须区分 `present`、`absent`、`unavailable` 和解析
+`error`。最低 PR 读取范围只包括恢复所需的 identity/state、base/head、head SHA、
+merge state、review decision 和当前 checks 摘要；不复制完整 review comments、
+check logs 或 PR 时间线。
 
 fresh clone 没有上一位协作者的 Recovery Log 是正常现象。Issue / Spec + Git / PR +
 Shared Work Log 必须足以恢复 checkpoint、方向变化、Evidence、Review Finding、
@@ -379,6 +417,8 @@ uv run python -m continuity --help
 ```
 
 写入操作使用 dedicated subcommand；本地 `recovery status` 不依赖 GitHub remote。
+CLI/API 的错误也是可观察输出，必须保留 corruption、identity conflict、binding /
+checkpoint mismatch 与 artifact unavailable 的差异，不能统一降级成空值。
 
 ## Skills、完成检查与 Git 最小不变量
 
@@ -418,7 +458,7 @@ Skills 判断哪些事实重要、checkpoint 是否 coherent、Evidence 是否�
 5. squash / rebase remap 保持 append-only，并可由 fresh clone 解析；
 6. binding state 和 recovery journal 在中断、损坏与并发 repair 下保持可诊断；
 7. rotation 验证显式 shared checkpoint、本地修改和未知远端操作；
-8. GitHub adapter 的 comment protocol 与最小 PR facts/availability 可确定性验证；
+8. GitHub adapter 的 comment protocol 与最小 Issue/PR facts/availability 可确定性验证；
 9. CLI 入口和 shared-only / local-only 边界可执行。
 
 同一规则优先只在最接近其责任的稳定层级测试；只有跨模块连接本身构成实质风险时

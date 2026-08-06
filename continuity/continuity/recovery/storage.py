@@ -1,4 +1,4 @@
-"""Crash-safe primitives used only by the clone-local recovery layer."""
+"""Crash-safe persistence primitives for clone-local recovery data."""
 
 from __future__ import annotations
 
@@ -7,10 +7,12 @@ import fcntl
 import json
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .errors import DamagedStateError, RecoveryError
+from ..errors import DamagedJournalError, DamagedStateError, RecoveryError
 
 
 def _fsync_directory(path: Path) -> None:
@@ -21,10 +23,24 @@ def _fsync_directory(path: Path) -> None:
         os.close(fd)
 
 
+def _ensure_directory(path: Path) -> None:
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir()
+        except FileExistsError:
+            pass
+        _fsync_directory(directory.parent)
+
+
 def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     """Persist JSON using tmp -> fsync -> replace -> directory fsync."""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_directory(path.parent)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -43,10 +59,10 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise DamagedStateError(f"damaged recovery state at {path}: {error}") from error
     if not isinstance(value, dict):
@@ -58,14 +74,33 @@ def _lock(fd: int) -> None:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
     except OSError as error:
-        if error.errno != errno.ENOTSUP:
-            raise
+        if error.errno == errno.ENOTSUP:
+            raise RecoveryError(
+                "local filesystem does not support required recovery locking"
+            ) from error
+        raise
+
+
+@contextmanager
+def file_lock(path: Path) -> Iterator[None]:
+    """Hold one durable clone-local lock for a compound Recovery operation."""
+
+    _ensure_directory(path.parent)
+    created = not path.exists()
+    with path.open("a+b") as stream:
+        _lock(stream.fileno())
+        if created:
+            stream.flush()
+            os.fsync(stream.fileno())
+            _fsync_directory(path.parent)
+        yield
 
 
 def append_jsonl(path: Path, record: dict[str, Any]) -> None:
-    """Append one fsynced record; concurrent local writers cannot interleave lines."""
+    """Append one fsynced record without allowing writer interleaving."""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_directory(path.parent)
+    created = not path.exists()
     encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
     with path.open("a", encoding="utf-8") as stream:
         _lock(stream.fileno())
@@ -73,6 +108,8 @@ def append_jsonl(path: Path, record: dict[str, Any]) -> None:
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
+        if created:
+            _fsync_directory(path.parent)
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -80,9 +117,6 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
     try:
         with path.open("rb+") as stream:
-            # Reading, deciding the repair offset, and truncating must share one
-            # lock. Otherwise a writer can finish an append after our snapshot
-            # and have that valid record removed by a stale repair decision.
             _lock(stream.fileno())
             data = stream.read()
             if data and not data.endswith(b"\n"):
@@ -102,11 +136,11 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
         try:
             value = json.loads(raw_line)
         except (UnicodeError, json.JSONDecodeError) as error:
-            raise RecoveryError(
+            raise DamagedJournalError(
                 f"damaged recovery record at {path}:{line_number}: {error}"
             ) from error
         if not isinstance(value, dict):
-            raise RecoveryError(
+            raise DamagedJournalError(
                 f"damaged recovery record at {path}:{line_number}: expected object"
             )
         records.append(value)

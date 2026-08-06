@@ -4,18 +4,28 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from continuity.git_facts import git_common_dir, git_dir
+from continuity.artifacts import git_common_dir, git_dir
 
-from continuity import ContextReconstructor, RecoveryError, RecoveryLog, WorkEvents
+from continuity import (
+    BindingMismatchError,
+    ContextReconstructor,
+    RecoveryLog,
+    WorkEventPublisher,
+    WorkEventReader,
+)
 
 from .conftest import commit_file, configure_user, git
-from .fakes import FakeSharedStore
+from .fakes import FakeProjectFacts, FakeSharedStore
 
 
-def test_local_interruption_reconstructs_intent_and_structured_git(repo, system):
-    _, recovery, _, context = system
+def test_local_interruption_reconstructs_intent_and_structured_git(
+    repo, recovery, context
+):
     recovery.bind("issue-5", "cycle-1")
-    recovery.intent("Implement the shared publisher", scope=["continuity/events.py"])
+    recovery.intent(
+        "Implement the shared publisher",
+        scope=["continuity/worklog/publication.py"],
+    )
     (repo / "continuity.py").write_text("unfinished = True\n", encoding="utf-8")
 
     replacement = context.load()
@@ -32,24 +42,26 @@ def test_local_interruption_reconstructs_intent_and_structured_git(repo, system)
     assert replacement["issue_or_spec"]["number"] == 5
 
 
-def test_explicit_resume_never_mixes_a_different_binding(repo, system):
-    _, recovery, _, context = system
+def test_explicit_resume_never_mixes_a_different_binding(recovery, context):
     recovery.bind("issue-5", "cycle-1")
-    recovery.intent("Issue five local state")
 
-    with pytest.raises(RecoveryError, match="does not match local recovery"):
+    with pytest.raises(
+        BindingMismatchError, match="does not match local recovery"
+    ) as failure:
         context.load("issue-9", "cycle-1")
+    assert failure.value.code == "binding_mismatch"
 
 
-def test_shared_only_resume_does_not_create_worktree_identity(repo):
-    shared = FakeSharedStore()
-    events = WorkEvents(repo, shared)
+def test_shared_only_resume_does_not_create_worktree_identity(
+    repo, shared, project_facts
+):
+    reader = WorkEventReader(repo, shared)
     identity_path = git_dir(repo) / "lean-harness" / "worktree.json"
     assert not identity_path.exists()
 
-    context = ContextReconstructor(
-        repo, events, recovery=None, project_facts=shared
-    ).load("issue-5", "cycle-1", shared_only=True)
+    context = ContextReconstructor(reader, project_facts=project_facts).load(
+        "issue-5", "cycle-1"
+    )
 
     assert context["work"] == "issue-5"
     assert context["local_recovery"] is None
@@ -78,11 +90,13 @@ def _independent_clones(tmp_path: Path) -> tuple[Path, Path, Path]:
 def test_fresh_clone_recovers_shared_direction_evidence_and_handoff(tmp_path):
     _, clone_a, clone_b = _independent_clones(tmp_path)
     shared = FakeSharedStore()
+    facts = FakeProjectFacts()
 
     recovery_a = RecoveryLog(clone_a)
     recovery_a.bind("issue-5", "cycle-1")
-    events_a = WorkEvents(clone_a, shared, recovery_a)
-    old_unresolved = events_a.append_significant(
+    reader_a = WorkEventReader(clone_a, shared)
+    publisher_a = WorkEventPublisher(reader_a, recovery_a)
+    old_unresolved = publisher_a.append_significant(
         "issue-5",
         "cycle-1",
         "finding",
@@ -95,14 +109,14 @@ def test_fresh_clone_recovers_shared_direction_evidence_and_handoff(tmp_path):
         clone_a, "continuity.py", "shared = True\n", "shared continuity"
     )
     git(clone_a, "push", "-q", "origin", "main")
-    checkpoint = events_a.create_checkpoint(
+    checkpoint = publisher_a.create_checkpoint(
         "issue-5",
         "cycle-1",
         checkpoint_commit,
         "collaborator:a",
         event_id="evt-shared-checkpoint",
     )
-    events_a.append_significant(
+    publisher_a.append_significant(
         "issue-5",
         "cycle-1",
         "direction-changed",
@@ -110,7 +124,7 @@ def test_fresh_clone_recovers_shared_direction_evidence_and_handoff(tmp_path):
         summary="Use GitHub Issue comments instead of tracked JSONL",
         event_id="evt-direction",
     )
-    events_a.record_verification(
+    publisher_a.record_verification(
         "issue-5",
         "cycle-1",
         checkpoint_commit,
@@ -119,7 +133,7 @@ def test_fresh_clone_recovers_shared_direction_evidence_and_handoff(tmp_path):
         summary="Continuity tests passed",
         event_id="evt-evidence",
     )
-    events_a.append_significant(
+    publisher_a.append_significant(
         "issue-5",
         "cycle-1",
         "handoff",
@@ -130,9 +144,9 @@ def test_fresh_clone_recovers_shared_direction_evidence_and_handoff(tmp_path):
 
     git(clone_b, "pull", "-q", "--ff-only")
     recovery_b = RecoveryLog(clone_b)
-    events_b = WorkEvents(clone_b, shared, recovery_b)
+    reader_b = WorkEventReader(clone_b, shared)
     context_b = ContextReconstructor(
-        clone_b, events_b, recovery_b, project_facts=shared
+        reader_b, project_facts=facts, recovery=recovery_b
     ).load("issue-5", "cycle-1")
 
     assert git_common_dir(clone_a) != git_common_dir(clone_b)
@@ -151,8 +165,9 @@ def test_fresh_clone_recovers_shared_direction_evidence_and_handoff(tmp_path):
     recovery_b.bind(
         "issue-5", "cycle-1", base_checkpoint_event_id=checkpoint["event_id"]
     )
+    publisher_b = WorkEventPublisher(reader_b, recovery_b)
     next_commit = commit_file(clone_b, "next.py", "continued = True\n", "continue")
-    next_checkpoint = events_b.create_checkpoint(
+    next_checkpoint = publisher_b.create_checkpoint(
         "issue-5",
         "cycle-1",
         next_commit,
@@ -160,15 +175,16 @@ def test_fresh_clone_recovers_shared_direction_evidence_and_handoff(tmp_path):
         event_id="evt-next-checkpoint",
     )
     assert next_checkpoint["producer"] == "collaborator:b"
-    assert len(events_b.events("issue-5", kind="checkpoint-created")) == 2
+    assert len(reader_b.events("issue-5", kind="checkpoint-created")) == 2
 
 
-def test_checkpoint_remap_is_readable_from_a_fresh_clone(repo, system, tmp_path):
-    shared, recovery, events, _ = system
+def test_checkpoint_remap_is_readable_from_a_fresh_clone(
+    repo, tmp_path, shared, recovery, reader, publisher
+):
     recovery.bind("issue-5", "cycle-1")
     git(repo, "checkout", "-qb", "feature")
     old_commit = commit_file(repo, "feature.py", "value = 1\n", "feature commit")
-    checkpoint = events.create_checkpoint(
+    checkpoint = publisher.create_checkpoint(
         "issue-5",
         "cycle-1",
         old_commit,
@@ -194,7 +210,7 @@ def test_checkpoint_remap_is_readable_from_a_fresh_clone(repo, system, tmp_path)
         ).returncode
         != 0
     )
-    events.remap_checkpoint(
+    publisher.remap_checkpoint(
         "issue-5",
         "cycle-1",
         checkpoint["event_id"],
@@ -203,7 +219,7 @@ def test_checkpoint_remap_is_readable_from_a_fresh_clone(repo, system, tmp_path)
         "collaborator:a",
         event_id="evt-squash-remap",
     )
-    assert events.find_event("issue-5", checkpoint["event_id"])["commit"] == old_commit
+    assert reader.find_event("issue-5", checkpoint["event_id"])["commit"] == old_commit
 
     remote = tmp_path / "history.git"
     clone_b = tmp_path / "fresh-clone"
@@ -211,8 +227,8 @@ def test_checkpoint_remap_is_readable_from_a_fresh_clone(repo, system, tmp_path)
     subprocess.run(["git", "clone", "-q", str(remote), str(clone_b)], check=True)
     configure_user(clone_b)
     recovery_b = RecoveryLog(clone_b)
-    events_b = WorkEvents(clone_b, shared, recovery_b)
-    context = ContextReconstructor(clone_b, events_b, recovery_b).load(
+    reader_b = WorkEventReader(clone_b, shared)
+    context = ContextReconstructor(reader_b, recovery=recovery_b).load(
         "issue-5", "cycle-1"
     )
 

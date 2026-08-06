@@ -8,12 +8,22 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .artifacts import head_commit
 from .context import ContextReconstructor
 from .errors import ContinuityError
-from .events import WorkEvents
-from .git_facts import head_commit
-from .recovery import RecoveryLog
-from .shared import SIGNIFICANT_KINDS, GitHubIssueSharedStore
+from .github import GitHubAdapter
+from .recovery import RecoveryLog, rotate_recovery
+from .worklog import WorkEventPublisher, WorkEventReader
+
+SHARED_WRITE_COMMANDS = {
+    "append",
+    "checkpoint",
+    "remap-checkpoint",
+    "reopen",
+    "resolve",
+    "verify",
+    "reconcile",
+}
 
 
 def _json_object(value: str) -> dict[str, Any]:
@@ -30,20 +40,26 @@ def _emit(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
-def _local_runtime(args: argparse.Namespace):
-    repo = Path(args.repo).resolve()
-    recovery = RecoveryLog(repo)
-    return repo, recovery
-
-
 def _shared_runtime(
     args: argparse.Namespace,
     repo: Path,
-    recovery: RecoveryLog | None = None,
-):
-    shared = GitHubIssueSharedStore(repo, repository=args.repository)
-    events = WorkEvents(repo, shared, recovery)
-    return shared, events
+) -> tuple[GitHubAdapter, WorkEventReader]:
+    shared = GitHubAdapter(repo, repository=args.repository)
+    return shared, WorkEventReader(repo, shared)
+
+
+def _shared_write_command(
+    commands: argparse._SubParsersAction,
+    name: str,
+    *,
+    cycle_option: str = "--cycle",
+) -> argparse.ArgumentParser:
+    command = commands.add_parser(name)
+    command.add_argument("--work", required=True)
+    command.add_argument(cycle_option, required=True)
+    command.add_argument("--producer", required=True)
+    command.add_argument("--event-id")
+    return command
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -120,59 +136,37 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--cycle")
     command.add_argument("--at-commit")
 
-    command = shared_commands.add_parser("append")
-    command.add_argument("--work", required=True)
-    command.add_argument("--cycle", required=True)
-    command.add_argument("--kind", required=True, choices=sorted(SIGNIFICANT_KINDS))
-    command.add_argument("--producer", required=True)
+    command = _shared_write_command(shared_commands, "append")
+    command.add_argument("--kind", required=True)
     command.add_argument("--summary", required=True)
     command.add_argument("--unresolved", action="store_true")
     command.add_argument("--reference", action="append")
     command.add_argument("--artifact", type=_json_object)
     command.add_argument("--details", type=_json_object)
-    command.add_argument("--event-id")
 
-    command = shared_commands.add_parser("checkpoint")
-    command.add_argument("--work", required=True)
-    command.add_argument("--cycle", required=True)
+    command = _shared_write_command(shared_commands, "checkpoint")
     command.add_argument("--commit", required=True)
-    command.add_argument("--producer", required=True)
     command.add_argument("--summary")
     command.add_argument("--reference", action="append")
-    command.add_argument("--event-id")
 
-    command = shared_commands.add_parser("remap-checkpoint")
-    command.add_argument("--work", required=True)
-    command.add_argument("--cycle", required=True)
+    command = _shared_write_command(shared_commands, "remap-checkpoint")
     command.add_argument("--checkpoint-event", required=True)
     command.add_argument("--new-commit", required=True)
     command.add_argument("--reason", required=True)
-    command.add_argument("--producer", required=True)
-    command.add_argument("--event-id")
 
-    command = shared_commands.add_parser("reopen")
-    command.add_argument("--work", required=True)
-    command.add_argument("--new-cycle", required=True)
-    command.add_argument("--producer", required=True)
+    command = _shared_write_command(
+        shared_commands, "reopen", cycle_option="--new-cycle"
+    )
     command.add_argument("--summary", required=True)
-    command.add_argument("--event-id")
 
-    command = shared_commands.add_parser("resolve")
-    command.add_argument("--work", required=True)
-    command.add_argument("--cycle", required=True)
+    command = _shared_write_command(shared_commands, "resolve")
     command.add_argument("--target-event", required=True)
-    command.add_argument("--producer", required=True)
     command.add_argument("--summary", required=True)
-    command.add_argument("--event-id")
 
-    command = shared_commands.add_parser("verify")
-    command.add_argument("--work", required=True)
-    command.add_argument("--cycle", required=True)
+    command = _shared_write_command(shared_commands, "verify")
     command.add_argument("--subject-commit", required=True)
     command.add_argument("--observation", required=True, type=_json_object)
-    command.add_argument("--producer", required=True)
     command.add_argument("--summary")
-    command.add_argument("--event-id")
 
     command = shared_commands.add_parser("reconcile")
     command.add_argument("--retry-missing", action="store_true")
@@ -187,60 +181,69 @@ def build_parser() -> argparse.ArgumentParser:
 def _run_recovery(
     args: argparse.Namespace,
     recovery: RecoveryLog,
-    events: WorkEvents | None = None,
+    reader: WorkEventReader | None = None,
 ):
     command = args.recovery_command
-    if command == "bind":
-        return recovery.bind(args.work, args.cycle, args.base_checkpoint_event)
-    if command == "pause":
-        return recovery.pause()
-    if command == "release":
-        return recovery.release()
-    if command == "status":
-        return recovery.status()
-    if command == "intent":
-        return recovery.intent(args.action, args.action_id, args.scope)
-    if command == "begin":
-        return recovery.begin(
-            args.action_id, args.target, args.expected, args.recovery_check
-        )
-    if command == "end":
-        return recovery.end(args.action_id, args.observation)
-    if command == "handoff-open":
-        return recovery.handoff_open_operation(
-            args.action_id, args.summary, args.recovery_instructions
-        )
-    if command == "resolve-handoff":
-        return recovery.resolve_handoff(args.handoff_id, args.observation)
     if command == "rotate":
-        if events is None:
+        if reader is None:
             raise AssertionError("rotation requires shared events")
-        return recovery.rotate(
+        return rotate_recovery(
+            recovery,
+            reader,
             args.checkpoint_event,
-            events,
             durable_events_acknowledged=args.ack_durable_events_promoted,
             next_intent=args.next_intent,
             local_changes_handling=args.local_changes_handling,
         )
-    raise AssertionError(command)
+    operations = {
+        "bind": lambda: recovery.bind(
+            args.work, args.cycle, args.base_checkpoint_event
+        ),
+        "pause": recovery.pause,
+        "release": recovery.release,
+        "status": recovery.status,
+        "intent": lambda: recovery.intent(args.action, args.action_id, args.scope),
+        "begin": lambda: recovery.begin(
+            args.action_id, args.target, args.expected, args.recovery_check
+        ),
+        "end": lambda: recovery.end(args.action_id, args.observation),
+        "handoff-open": lambda: recovery.handoff_open_operation(
+            args.action_id, args.summary, args.recovery_instructions
+        ),
+        "resolve-handoff": lambda: recovery.resolve_handoff(
+            args.handoff_id, args.observation
+        ),
+    }
+    try:
+        return operations[command]()
+    except KeyError:
+        raise AssertionError(command) from None
 
 
-def _run_shared(args: argparse.Namespace, events: WorkEvents):
+def _run_shared_read(args: argparse.Namespace, reader: WorkEventReader):
     command = args.shared_command
-    if command == "list":
-        return events.events(args.work, cycle_id=args.cycle, kind=args.kind, pr=args.pr)
-    if command == "find":
-        return events.find_event(args.work, args.event_id)
-    if command == "unresolved":
-        return events.unresolved_events(args.work)
-    if command == "latest-checkpoint":
-        return events.latest_checkpoint(
+    operations = {
+        "list": lambda: reader.events(
+            args.work, cycle_id=args.cycle, kind=args.kind, pr=args.pr
+        ),
+        "find": lambda: reader.find_event(args.work, args.event_id),
+        "unresolved": lambda: reader.unresolved_events(args.work),
+        "latest-checkpoint": lambda: reader.latest_checkpoint(
             args.work,
-            at_commit=args.at_commit or head_commit(events.repo),
+            at_commit=args.at_commit or head_commit(reader.repo),
             cycle_id=args.cycle,
-        )
-    if command == "append":
-        return events.append_significant(
+        ),
+    }
+    try:
+        return operations[command]()
+    except KeyError:
+        raise AssertionError(command) from None
+
+
+def _run_shared_write(args: argparse.Namespace, publisher: WorkEventPublisher):
+    command = args.shared_command
+    operations = {
+        "append": lambda: publisher.append_significant(
             args.work,
             args.cycle,
             args.kind,
@@ -251,9 +254,8 @@ def _run_shared(args: argparse.Namespace, events: WorkEvents):
             artifact=args.artifact,
             details=args.details,
             event_id=args.event_id,
-        )
-    if command == "checkpoint":
-        return events.create_checkpoint(
+        ),
+        "checkpoint": lambda: publisher.create_checkpoint(
             args.work,
             args.cycle,
             args.commit,
@@ -261,9 +263,8 @@ def _run_shared(args: argparse.Namespace, events: WorkEvents):
             summary=args.summary,
             references=args.reference,
             event_id=args.event_id,
-        )
-    if command == "remap-checkpoint":
-        return events.remap_checkpoint(
+        ),
+        "remap-checkpoint": lambda: publisher.remap_checkpoint(
             args.work,
             args.cycle,
             args.checkpoint_event,
@@ -271,26 +272,23 @@ def _run_shared(args: argparse.Namespace, events: WorkEvents):
             args.reason,
             args.producer,
             event_id=args.event_id,
-        )
-    if command == "reopen":
-        return events.reopen_work(
+        ),
+        "reopen": lambda: publisher.reopen_work(
             args.work,
             args.new_cycle,
             args.producer,
             args.summary,
             event_id=args.event_id,
-        )
-    if command == "resolve":
-        return events.resolve_event(
+        ),
+        "resolve": lambda: publisher.resolve_event(
             args.work,
             args.cycle,
             args.target_event,
             args.producer,
             args.summary,
             event_id=args.event_id,
-        )
-    if command == "verify":
-        return events.record_verification(
+        ),
+        "verify": lambda: publisher.record_verification(
             args.work,
             args.cycle,
             args.subject_commit,
@@ -298,10 +296,15 @@ def _run_shared(args: argparse.Namespace, events: WorkEvents):
             args.producer,
             summary=args.summary,
             event_id=args.event_id,
-        )
-    if command == "reconcile":
-        return events.reconcile_pending_shared_events(retry_missing=args.retry_missing)
-    raise AssertionError(command)
+        ),
+        "reconcile": lambda: publisher.reconcile_pending_shared_events(
+            retry_missing=args.retry_missing
+        ),
+    }
+    try:
+        return operations[command]()
+    except KeyError:
+        raise AssertionError(command) from None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -309,37 +312,35 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repo = Path(args.repo).resolve()
         if args.command == "recovery":
-            _, recovery = _local_runtime(args)
-            events = None
+            recovery = RecoveryLog(repo)
+            reader = None
             if args.recovery_command == "rotate":
-                _, events = _shared_runtime(args, repo, recovery)
-            value = _run_recovery(args, recovery, events)
+                _, reader = _shared_runtime(args, repo)
+            value = _run_recovery(args, recovery, reader)
         elif args.command == "shared":
-            write_commands = {
-                "append",
-                "checkpoint",
-                "remap-checkpoint",
-                "reopen",
-                "resolve",
-                "verify",
-                "reconcile",
-            }
-            recovery = (
-                RecoveryLog(repo) if args.shared_command in write_commands else None
-            )
-            _, events = _shared_runtime(args, repo, recovery)
-            value = _run_shared(args, events)
+            _, reader = _shared_runtime(args, repo)
+            if args.shared_command in SHARED_WRITE_COMMANDS:
+                publisher = WorkEventPublisher(reader, RecoveryLog(repo))
+                value = _run_shared_write(args, publisher)
+            else:
+                value = _run_shared_read(args, reader)
         elif args.command == "resume":
             recovery = None if args.shared_only else RecoveryLog(repo)
-            shared, events = _shared_runtime(args, repo, recovery)
+            shared, reader = _shared_runtime(args, repo)
             value = ContextReconstructor(
-                repo, events, recovery, project_facts=shared
-            ).load(args.work, args.cycle, shared_only=args.shared_only)
+                reader, project_facts=shared, recovery=recovery
+            ).load(args.work, args.cycle)
         else:
             raise AssertionError(args.command)
         _emit(value)
     except ContinuityError as error:
-        print(f"error: {error}", file=sys.stderr)
+        print(
+            json.dumps(
+                {"error": {"code": error.code, "message": str(error)}},
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
         return 1
     return 0
 

@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import subprocess
 
-import continuity.shared as shared_module
+import continuity.github as github_module
 import pytest
-from continuity.shared import render_comment
+from continuity.github import parse_comment, render_comment
+from continuity.worklog.events import prepare_event
 
-from continuity import GitHubIssueSharedStore, SharedStoreError
+from continuity import EventValidationError, GitHubAdapter, SharedStoreError
 
 
 def _event(**overrides):
@@ -21,7 +22,7 @@ def _event(**overrides):
         "summary": "Adapter fact",
     }
     event.update(overrides)
-    return event
+    return prepare_event(event)
 
 
 def _comment(event, comment_id=41):
@@ -37,6 +38,13 @@ def _completed(arguments, *, stdout="", stderr="", returncode=0):
     return subprocess.CompletedProcess(arguments, returncode, stdout, stderr)
 
 
+def test_github_comment_parser_validates_tagged_remote_payload():
+    invalid = {**_event(), "unresolved": "yes"}
+
+    with pytest.raises(EventValidationError, match="unresolved"):
+        parse_comment(_comment(invalid))
+
+
 def test_github_store_lists_and_appends_structured_comments(repo, monkeypatch):
     existing = _event()
     appended = _event(event_id="evt-appended", summary="Appended fact")
@@ -49,34 +57,59 @@ def test_github_store_lists_and_appends_structured_comments(repo, monkeypatch):
                 value for value in arguments if value.startswith("body=")
             )
             assert "lean-harness-work-event:v1" in body_argument
+            assert "Appended fact" in body_argument
             return _completed(arguments, stdout=json.dumps(_comment(appended, 42)))
         assert "--paginate" in arguments
         assert "--slurp" in arguments
-        payload = [[{"id": 1, "body": "ordinary comment"}], [_comment(existing)]]
+        payload = [
+            [{"id": 1, "body": "ordinary comment"}],
+            [_comment(existing), _comment(existing, 43)],
+        ]
         return _completed(arguments, stdout=json.dumps(payload))
 
-    monkeypatch.setattr(shared_module.subprocess, "run", run)
-    store = GitHubIssueSharedStore(repo, repository="owner/repo")
+    monkeypatch.setattr(github_module.subprocess, "run", run)
+    store = GitHubAdapter(repo, repository="owner/repo")
 
-    assert store.list_events("issue-5")[0]["event_id"] == existing["event_id"]
+    listed = store.list_events("issue-5")
+    assert [event["event_id"] for event in listed] == [existing["event_id"]]
     created = store.append_event("issue-5", appended)
     assert created["remote"]["comment_id"] == 42
     assert sum("--method" in arguments for arguments in calls) == 1
 
 
-def test_github_store_rejects_event_identity_conflict(repo, monkeypatch):
-    original = _event()
+def test_github_store_rejects_created_comment_identity_conflict(repo, monkeypatch):
+    observed = _event(kind="direction-changed", summary="Different fact")
 
     def run(arguments, **kwargs):
-        return _completed(arguments, stdout=json.dumps([[_comment(original)]]))
+        assert "--method" in arguments
+        return _completed(arguments, stdout=json.dumps(_comment(observed)))
 
-    monkeypatch.setattr(shared_module.subprocess, "run", run)
-    store = GitHubIssueSharedStore(repo, repository="owner/repo")
+    monkeypatch.setattr(github_module.subprocess, "run", run)
+    store = GitHubAdapter(repo, repository="owner/repo")
 
     with pytest.raises(SharedStoreError, match="event identity conflict"):
-        store.append_event(
-            "issue-5", _event(kind="direction-changed", summary="Different fact")
-        )
+        store.append_event("issue-5", _event())
+
+
+def test_github_store_checks_partition_and_response_before_trusting_write(
+    repo, monkeypatch
+):
+    calls = []
+
+    def run(arguments, **kwargs):
+        calls.append(arguments)
+        return _completed(arguments, stdout="[]")
+
+    monkeypatch.setattr(github_module.subprocess, "run", run)
+    store = GitHubAdapter(repo, repository="owner/repo")
+
+    with pytest.raises(SharedStoreError, match="does not match partition"):
+        store.append_event("issue-5", _event(work="issue-9"))
+    assert calls == []
+
+    with pytest.raises(SharedStoreError, match="unexpected shape"):
+        store.append_event("issue-5", _event())
+    assert len(calls) == 1
 
 
 def test_pull_request_facts_include_minimal_check_summary(repo, monkeypatch):
@@ -115,9 +148,9 @@ def test_pull_request_facts_include_minimal_check_summary(repo, monkeypatch):
         assert arguments[1:4] == ["pr", "view", "main"]
         return _completed(arguments, stdout=json.dumps(payload))
 
-    monkeypatch.setattr(shared_module, "current_branch", lambda repo: "main")
-    monkeypatch.setattr(shared_module.subprocess, "run", run)
-    store = GitHubIssueSharedStore(repo, repository="owner/repo")
+    monkeypatch.setattr(github_module, "current_branch", lambda repo: "main")
+    monkeypatch.setattr(github_module.subprocess, "run", run)
+    store = GitHubAdapter(repo, repository="owner/repo")
 
     facts = store.get_current_pull_request()
 
@@ -154,9 +187,38 @@ def test_pull_request_facts_distinguish_absent_from_unavailable(
         )
         return _completed(arguments, stderr=stderr, returncode=1)
 
-    monkeypatch.setattr(shared_module, "current_branch", lambda repo: "main")
-    monkeypatch.setattr(shared_module.subprocess, "run", run)
-    store = GitHubIssueSharedStore(repo, repository="owner/repo")
+    monkeypatch.setattr(github_module, "current_branch", lambda repo: "main")
+    monkeypatch.setattr(github_module.subprocess, "run", run)
+    store = GitHubAdapter(repo, repository="owner/repo")
 
     facts = store.get_current_pull_request()
     assert facts["availability"] == expected
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("missing-issue", "absent"),
+        ("hidden-repository", "unavailable"),
+        ("auth", "unavailable"),
+        ("missing-gh", "unavailable"),
+        ("invalid-json", "error"),
+    ],
+)
+def test_work_item_facts_expose_availability(repo, monkeypatch, failure, expected):
+    def run(arguments, **kwargs):
+        if failure == "missing-gh":
+            raise FileNotFoundError("gh")
+        if failure == "invalid-json":
+            return _completed(arguments, stdout="{broken")
+        if failure in {"missing-issue", "hidden-repository"}:
+            if failure == "missing-issue" and arguments[-1] == "repos/owner/repo":
+                return _completed(arguments, stdout="{}")
+            return _completed(arguments, stderr="HTTP 404: Not Found", returncode=1)
+        stderr = "auth required"
+        return _completed(arguments, stderr=stderr, returncode=1)
+
+    monkeypatch.setattr(github_module.subprocess, "run", run)
+    store = GitHubAdapter(repo, repository="owner/repo")
+
+    assert store.get_work_item("issue-5")["availability"] == expected
