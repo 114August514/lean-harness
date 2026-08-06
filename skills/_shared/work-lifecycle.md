@@ -146,7 +146,8 @@ Remediation 使用上述特化工作包，不得借修复之名
 
 - 执行 Skill 在形成可验证候选结果时，应确保当前 intent 已记录，
   结果不透明的外部操作已有 `begin / end`；
-- `finish-work` 在输出最终状态前，按 `continuity/contract.md` 第九节
+- `finish-work` 在输出最终状态前，按 `continuity/contract.md` 的
+  “Skills、完成检查与 Git 最小不变量”
   检查恢复日志和检查点状态；
 - worker 与主 Agent 之间的候选工作事件交接，见
   `skills/_shared/delegation-contract.md`。

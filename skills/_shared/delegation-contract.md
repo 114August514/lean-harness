@@ -106,7 +106,7 @@ Open or unknown operations  未结束或结果未知的操作（begin 无 end）
 ```
 
 worker 不直接写 Project 工作日志的长期分区；候选事件交回主 Agent 检查后追加
-（写入所有权见 `continuity/contract.md` 第四节）。
+（写入所有权见 `continuity/contract.md` 的“写入所有权与正式决定”）。
 
 ---
 
@@ -152,4 +152,5 @@ worker 不直接写 Project 工作日志的长期分区；候选事件交回主 
 
 - 工作单元的目标与验收格式：`skills/_shared/work-unit-contract.md`
 - 委派在整个闭环中的位置：`skills/_shared/work-lifecycle.md`
-- 连续性相关字段的语义：`continuity/contract.md` 第九节
+- 连续性相关字段的语义：`continuity/contract.md` 的
+  “Skills、完成检查与 Git 最小不变量”

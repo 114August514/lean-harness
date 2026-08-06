@@ -207,4 +207,5 @@ HANDOFF  + 最小 HANDOFF 内容（见上）
 - `skills/_shared/work-lifecycle.md` — 责任顺序与必要规则；
 - `skills/_shared/work-unit-contract.md` — Acceptance mode；
 - `skills/_shared/delegation-contract.md` — remediation 委派的格式基础；
-- `continuity/contract.md` — 完成阶段的连续性检查（第九节）。
+- `continuity/contract.md` — 完成阶段的连续性检查
+  （“Skills、完成检查与 Git 最小不变量”）。

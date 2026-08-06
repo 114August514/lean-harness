@@ -1,289 +1,363 @@
-"""每个活跃 worktree 的恢复日志。
-
-恢复日志保护最近检查点之后尚未稳定的执行现场：
-
-- ``intent``：当前已经确定准备做什么（普通本地工作只需要它）；
-- ``begin`` / ``end``：结果不透明或不能安全重复的操作（远端写等）；
-
-恢复判断规则：
-
-- 只有 intent        → 行动已经确定，但未确认开始；
-- 有 begin，没有 end  → 操作已经发起，结果未知；
-- 存在 end            → 操作已经返回，按 observation 和当前状态判断下一步。
-"""
+"""Clone-local, per-worktree, per-binding-generation recovery journal."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from .store import JsonlStore, StoreError, current_branch, head_commit, now_iso
+from .errors import RecoveryError
+from .git_facts import (
+    commit_exists,
+    current_branch,
+    git_common_dir,
+    head_commit,
+    is_ancestor,
+    structured_status,
+    worktree_id,
+)
+from .storage import append_jsonl, atomic_write_json, read_json, read_jsonl
 
-LOG_NAME = "log.jsonl"
-STATE_NAME = "state.json"
-
-# 合法状态：active / paused / released
-_ACTIVE = "active"
+if TYPE_CHECKING:
+    from .events import WorkEvents
 
 
-@dataclass
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
 class RecoveryLog:
-    store: JsonlStore
+    """The local safety net for one Git worktree.
 
-    @property
-    def log_path(self) -> Path:
-        return self.store.recovery_dir / LOG_NAME
+    State lives outside every checkout at::
+
+        <git-common-dir>/lean-harness/recovery/<stable-worktree-id>/
+
+    Every bind creates a fresh ``binding_id`` and a separate append-only journal.
+    """
+
+    def __init__(self, repo: Path):
+        self.repo = Path(repo).resolve()
+        self.worktree_id = worktree_id(self.repo)
+        self.root = (
+            git_common_dir(self.repo) / "lean-harness" / "recovery" / self.worktree_id
+        )
 
     @property
     def state_path(self) -> Path:
-        return self.store.recovery_dir / STATE_NAME
+        return self.root / "current-binding.json"
 
-    # --- 绑定 ---
+    def binding_log_path(self, binding_id: str) -> Path:
+        return self.root / "bindings" / binding_id / "recovery.jsonl"
 
-    def bind(self, work: str, cycle_id: str, base_checkpoint: str | None) -> dict:
-        """把当前 worktree 绑定到某个 work unit，创建或接续恢复日志。"""
-        if self._state() and self._state().get("status") == _ACTIVE:
-            raise StoreError(
-                "worktree already has an active binding; "
-                "use 'recovery pause' or 'recovery release' first"
-            )
-        head = head_commit(self.store.repo)
-        state = {
+    @property
+    def log_path(self) -> Path:
+        state = self._state()
+        if state is None:
+            return self.root / "no-binding.jsonl"
+        return self.binding_log_path(state["binding_id"])
+
+    def bind(
+        self,
+        work: str,
+        cycle_id: str,
+        base_checkpoint_event_id: str | None = None,
+    ) -> dict[str, Any]:
+        current = self._state()
+        if current is not None:
+            if current.get("status") == "active":
+                raise RecoveryError(
+                    "worktree already has an active binding; pause or release it first"
+                )
+            unexplained = self.unexplained_open_begins()
+            if unexplained:
+                raise RecoveryError(
+                    "cannot rebind: current binding has begin record(s) without end "
+                    "or recoverable handoff"
+                )
+
+        binding_id = f"bind-{uuid.uuid4().hex}"
+        state: dict[str, Any] = {
+            "schema_version": 1,
+            "worktree_id": self.worktree_id,
+            "binding_id": binding_id,
             "work": work,
             "cycle_id": cycle_id,
-            "branch": current_branch(self.store.repo),
-            "base_checkpoint": base_checkpoint,
-            "bound_at": now_iso(),
-            "head_at_bind": head,
-            "status": _ACTIVE,
+            "status": "active",
+            "branch": current_branch(self.repo),
+            "head_at_bind": head_commit(self.repo),
+            "base_checkpoint_event_id": base_checkpoint_event_id,
+            "bound_at": utc_now(),
         }
-        import json
-
-        self.store.recovery_dir.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        self._append(
+        self._append_for(
+            state,
             {
                 "type": "bound",
-                "work": work,
-                "cycle_id": cycle_id,
+                "base_checkpoint_event_id": base_checkpoint_event_id,
                 "branch": state["branch"],
-                "base_checkpoint": base_checkpoint,
-                "head_at_bind": head,
-            }
+                "head_at_bind": state["head_at_bind"],
+            },
         )
+        atomic_write_json(self.state_path, state)
         return state
 
-    def pause(self) -> dict:
+    def pause(self) -> dict[str, Any]:
         state = self._require_active()
-        state["status"] = "paused"
-        state["paused_at"] = now_iso()
-        self._write_state(state)
         self._append({"type": "paused"})
-        return state
+        updated = {**state, "status": "paused", "paused_at": utc_now()}
+        atomic_write_json(self.state_path, updated)
+        return updated
 
-    def release(self) -> dict:
-        """解除绑定。调用方应已确认没有未解释的 begin 无 end。"""
-        state = self._require()
-        state["status"] = "released"
-        state["released_at"] = now_iso()
-        self._write_state(state)
+    def release(self) -> dict[str, Any]:
+        state = self._require_current(allow_paused=True)
+        unexplained = self.unexplained_open_begins()
+        if unexplained:
+            raise RecoveryError(
+                "cannot release: begin record(s) lack end or recoverable handoff"
+            )
         self._append({"type": "released"})
-        return state
-
-    # --- 记录 ---
+        updated = {**state, "status": "released", "released_at": utc_now()}
+        atomic_write_json(self.state_path, updated)
+        return updated
 
     def intent(
         self,
         action: str,
         action_id: str | None = None,
         scope: list[str] | None = None,
-    ) -> dict:
-        state = self._require_active()
-        record = {
-            "type": "intent",
-            "work": state["work"],
-            "cycle_id": state["cycle_id"],
-            "action_id": action_id or self._next_action_id("intent"),
-            "action": action,
-            "scope": scope or [],
-            "worktree": self.store.repo.name,
-            "base_checkpoint": state.get("base_checkpoint"),
-            "head_at_record": head_commit(self.store.repo),
-        }
-        return self._append(record)
+    ) -> dict[str, Any]:
+        self._require_active()
+        return self._append(
+            {
+                "type": "intent",
+                "action_id": action_id or f"act-{uuid.uuid4().hex}",
+                "action": action,
+                "scope": list(scope or []),
+                "base_checkpoint_event_id": self._state().get(
+                    "base_checkpoint_event_id"
+                ),
+                "head_at_record": head_commit(self.repo),
+            }
+        )
 
     def begin(
         self,
         action_id: str,
-        target: dict,
-        expected_change: dict | None = None,
-        recovery_check: dict | None = None,
-    ) -> dict:
-        """在副作用发生前持久化。"""
-        state = self._require_active()
-        record = {
-            "type": "begin",
-            "work": state["work"],
-            "cycle_id": state["cycle_id"],
-            "action_id": action_id,
-            "target": target,
-            "expected_change": expected_change or {},
-            "recovery_check": recovery_check or {},
-            "head_at_record": head_commit(self.store.repo),
-        }
-        return self._append(record)
-
-    def end(self, action_id: str, observation: dict) -> dict:
-        """操作返回并获得可靠观察后记录。
-
-        end 只表示操作已经返回、观察结果已经记录，
-        不表示目标、Claim 或验收已经满足。
-        """
+        target: dict[str, Any],
+        expected_change: dict[str, Any] | None = None,
+        recovery_check: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self._require_active()
-        if not any(
-            r.get("type") == "begin" and r.get("action_id") == action_id
-            for r in self.records()
+        if any(
+            record.get("type") == "begin" and record.get("action_id") == action_id
+            for record in self.records()
         ):
-            raise StoreError(f"end without begin for action_id: {action_id}")
-        record = {
-            "type": "end",
-            "action_id": action_id,
-            "observation": observation,
-            "head_at_record": head_commit(self.store.repo),
+            raise RecoveryError(f"duplicate begin for action_id: {action_id}")
+        return self._append(
+            {
+                "type": "begin",
+                "action_id": action_id,
+                "target": target,
+                "expected_change": expected_change or {},
+                "recovery_check": recovery_check or {},
+                "head_at_record": head_commit(self.repo),
+            }
+        )
+
+    def end(self, action_id: str, observation: dict[str, Any]) -> dict[str, Any]:
+        self._require_current(allow_paused=True)
+        records = self.records()
+        if not any(
+            record.get("type") == "begin" and record.get("action_id") == action_id
+            for record in records
+        ):
+            raise RecoveryError(f"end without begin for action_id: {action_id}")
+        if any(
+            record.get("type") == "end" and record.get("action_id") == action_id
+            for record in records
+        ):
+            raise RecoveryError(f"duplicate end for action_id: {action_id}")
+        return self._append(
+            {
+                "type": "end",
+                "action_id": action_id,
+                "observation": observation,
+                "head_at_record": head_commit(self.repo),
+            }
+        )
+
+    def handoff_open_operation(
+        self,
+        action_id: str,
+        summary: str,
+        recovery_instructions: str,
+    ) -> dict[str, Any]:
+        """Explain an open operation so release/rebind can remain recoverable."""
+
+        self._require_current(allow_paused=True)
+        if action_id not in {item["action_id"] for item in self.open_begins()}:
+            raise RecoveryError(f"cannot hand off non-open action_id: {action_id}")
+        if not summary.strip() or not recovery_instructions.strip():
+            raise RecoveryError("recoverable handoff requires summary and instructions")
+        return self._append(
+            {
+                "type": "operation-handoff",
+                "action_id": action_id,
+                "summary": summary,
+                "recovery_instructions": recovery_instructions,
+            }
+        )
+
+    def records(self) -> list[dict[str, Any]]:
+        state = self._state()
+        if state is None:
+            return []
+        return read_jsonl(self.binding_log_path(state["binding_id"]))
+
+    def open_begins(self) -> list[dict[str, Any]]:
+        begins: dict[str, dict[str, Any]] = {}
+        ended: set[str] = set()
+        for record in self.records():
+            action_id = record.get("action_id")
+            if record.get("type") == "begin" and isinstance(action_id, str):
+                begins[action_id] = record
+            elif record.get("type") == "end" and isinstance(action_id, str):
+                ended.add(action_id)
+        return [begin for key, begin in begins.items() if key not in ended]
+
+    def unexplained_open_begins(self) -> list[dict[str, Any]]:
+        handed_off = {
+            record["action_id"]
+            for record in self.records()
+            if record.get("type") == "operation-handoff"
         }
-        return self._append(record)
+        return [
+            begin
+            for begin in self.open_begins()
+            if begin["action_id"] not in handed_off
+        ]
 
-    # --- 读取 ---
-
-    def records(self) -> list[dict]:
-        return self.store.read(self.log_path)
-
-    def status(self) -> dict:
-        state = self._state() or {}
+    def status(self) -> dict[str, Any]:
+        state = self._state()
         records = self.records()
         latest_intent = next(
-            (r for r in reversed(records) if r.get("type") == "intent"), None
+            (record for record in reversed(records) if record.get("type") == "intent"),
+            None,
         )
         return {
             "binding": state,
             "latest_intent": latest_intent,
             "open_begins": self.open_begins(),
+            "unexplained_open_begins": self.unexplained_open_begins(),
             "record_count": len(records),
+            "recovery_root": str(self.root),
         }
 
-    def open_begins(self) -> list[dict]:
-        """有 begin 但尚未有 end 的操作：结果未知。"""
-        begins: dict[str, dict] = {}
-        ended: set[str] = set()
-        for r in self.records():
-            if r.get("type") == "begin":
-                begins[r["action_id"]] = r
-            elif r.get("type") == "end":
-                ended.add(r["action_id"])
-        return [b for aid, b in begins.items() if aid not in ended]
+    def assert_active_binding(self, work: str, cycle_id: str) -> dict[str, Any]:
+        state = self._require_active()
+        if state["work"] != work or state["cycle_id"] != cycle_id:
+            raise RecoveryError(
+                "shared event does not match the active recovery binding: "
+                f"bound to {state['work']}/{state['cycle_id']}, requested "
+                f"{work}/{cycle_id}"
+            )
+        return state
 
-    # --- 轮转 ---
-
-    def rotate(self, new_checkpoint: str, force: bool = False) -> dict:
-        """把已被新检查点吸收的记录移入 archive，只保留仍需保护的现场。
-
-        轮转条件（除非 force）：
-
-        - 不存在未解释的 begin 无 end；
-        - 新 checkpoint 是当前 HEAD 的祖先（本地修改已被吸收）；
-        - 调用方已另行确认长期事件提升与下一步明确（CLI 用 --force 表达）。
-        """
-        from .store import is_ancestor
+    def rotate(
+        self,
+        checkpoint_event_id: str,
+        work_events: WorkEvents,
+        *,
+        durable_events_confirmed: bool,
+        next_phase: str,
+        local_changes_handling: str | None = None,
+    ) -> dict[str, Any]:
+        """Advance the recovery boundary only after validating a shared checkpoint."""
 
         state = self._require_active()
-        records = self.records()
-        open_begins = self.open_begins()
-        if open_begins and not force:
-            raise StoreError(
-                f"cannot rotate: {len(open_begins)} begin record(s) without end; "
-                "confirm the external operations first or pass --force"
+        if self.unexplained_open_begins():
+            raise RecoveryError("cannot rotate: unexplained begin record(s) remain")
+        checkpoint = work_events.find_event(state["work"], checkpoint_event_id)
+        if checkpoint is None or checkpoint.get("kind") != "checkpoint-created":
+            raise RecoveryError(
+                "cannot rotate: checkpoint must be a real shared checkpoint-created event"
             )
-        head = head_commit(self.store.repo)
-        absorbed = head is not None and is_ancestor(
-            self.store.repo, new_checkpoint, head
+        if (
+            checkpoint.get("work") != state["work"]
+            or checkpoint.get("cycle_id") != state["cycle_id"]
+        ):
+            raise RecoveryError(
+                "cannot rotate: checkpoint does not belong to the active work/cycle"
+            )
+        commit = work_events.resolve_checkpoint_event(checkpoint)
+        head = head_commit(self.repo)
+        if head is None or not commit_exists(self.repo, commit):
+            raise RecoveryError("cannot rotate: checkpoint commit is absent locally")
+        if not is_ancestor(self.repo, commit, head):
+            raise RecoveryError(
+                "cannot rotate: checkpoint commit is not on the current artifact path"
+            )
+        changes = structured_status(self.repo)
+        if changes and not (local_changes_handling or "").strip():
+            raise RecoveryError(
+                "cannot rotate: local changes are not absorbed or explicitly handled"
+            )
+        if not durable_events_confirmed:
+            raise RecoveryError(
+                "cannot rotate: durable shared events have not been confirmed published"
+            )
+        if not next_phase.strip():
+            raise RecoveryError("cannot rotate: next phase is not explicit")
+
+        record = self._append(
+            {
+                "type": "rotated",
+                "checkpoint_event_id": checkpoint_event_id,
+                "checkpoint_commit": commit,
+                "head_at_rotation": head,
+                "local_changes_handling": local_changes_handling,
+                "next_phase": next_phase,
+            }
         )
-        if not absorbed and not force:
-            raise StoreError(
-                f"cannot rotate: {new_checkpoint} is not an ancestor of HEAD; "
-                "local changes are not absorbed by this checkpoint"
-            )
-
-        kept = [
-            r
-            for r in records
-            if r.get("type") in ("begin", "end") and r.get("action_id")
-            and r["action_id"] not in self._ended_action_ids(records)
-        ]
-        if force:
-            kept = [
-                r
-                for r in records
-                if r.get("type") in ("begin", "end")
-                and r.get("action_id") in {b["action_id"] for b in self.open_begins()}
-            ]
-        archive_name = f"archive-{new_checkpoint}.jsonl"
-        archived = [r for r in records if r not in kept]
-        if archived:
-            archive_path = self.store.recovery_dir / archive_name
-            for r in archived:
-                self.store.append(archive_path, r)
-
-        self.store.rewrite(self.log_path, kept)
-        state["base_checkpoint"] = new_checkpoint
-        state["rotated_at"] = now_iso()
-        self._write_state(state)
-        self._append({"type": "rotated", "new_checkpoint": new_checkpoint})
-        return {
-            "archived": len(archived),
-            "kept": len(kept),
-            "base_checkpoint": new_checkpoint,
+        updated = {
+            **state,
+            "base_checkpoint_event_id": checkpoint_event_id,
+            "base_checkpoint_commit": commit,
+            "rotated_at": utc_now(),
+            "next_phase": next_phase,
         }
+        atomic_write_json(self.state_path, updated)
+        return {"binding": updated, "rotation": record}
 
-    # --- 内部 ---
+    def _state(self) -> dict[str, Any] | None:
+        return read_json(self.state_path)
 
-    def _append(self, record: dict) -> dict:
-        record = {"ts": now_iso(), **record}
-        return self.store.append(self.log_path, record)
-
-    def _state(self) -> dict | None:
-        import json
-
-        if not self.state_path.exists():
-            return None
-        return json.loads(self.state_path.read_text(encoding="utf-8"))
-
-    def _require(self) -> dict:
+    def _require_current(self, *, allow_paused: bool = False) -> dict[str, Any]:
         state = self._state()
         if state is None:
-            raise StoreError(
-                "worktree is not bound to any work unit; run 'recovery bind' first"
-            )
+            raise RecoveryError("worktree has no recovery binding")
+        allowed = {"active", "paused"} if allow_paused else {"active"}
+        if state.get("status") not in allowed:
+            raise RecoveryError(f"binding is {state.get('status')}, not usable")
         return state
 
-    def _require_active(self) -> dict:
-        state = self._require()
-        if state.get("status") != _ACTIVE:
-            raise StoreError(f"binding is {state.get('status')}, not active")
-        return state
+    def _require_active(self) -> dict[str, Any]:
+        return self._require_current()
 
-    def _write_state(self, state: dict) -> None:
-        import json
+    def _append(self, record: dict[str, Any]) -> dict[str, Any]:
+        return self._append_for(self._require_current(allow_paused=True), record)
 
-        self.state_path.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
-    def _next_action_id(self, prefix: str) -> str:
-        n = sum(1 for r in self.records() if r.get("type") == prefix) + 1
-        return f"{prefix}-{n}"
-
-    @staticmethod
-    def _ended_action_ids(records: list[dict]) -> set[str]:
-        return {r["action_id"] for r in records if r.get("type") == "end"}
+    def _append_for(
+        self, state: dict[str, Any], record: dict[str, Any]
+    ) -> dict[str, Any]:
+        enriched = {
+            "record_id": f"rec-{uuid.uuid4().hex}",
+            "recorded_at": utc_now(),
+            "binding_id": state["binding_id"],
+            "work": state["work"],
+            "cycle_id": state["cycle_id"],
+            **record,
+        }
+        append_jsonl(self.binding_log_path(state["binding_id"]), enriched)
+        return enriched
