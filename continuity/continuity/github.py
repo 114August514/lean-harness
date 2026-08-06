@@ -20,7 +20,7 @@ from .worklog.events import (
 MARKER_VERSION = "v1"
 MARKER_PREFIX = "lean-harness-work-event"
 _MARKER = re.compile(rf"<!-- {MARKER_PREFIX}:{MARKER_VERSION} event_id=([^ ]+) -->")
-_PAYLOAD = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+_PAYLOAD = re.compile(r"```json\s*(\{.*\})\s*```", re.DOTALL)
 _WORK = re.compile(r"^issue-([1-9][0-9]*)$")
 
 

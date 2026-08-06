@@ -45,6 +45,20 @@ def test_github_comment_parser_validates_tagged_remote_payload():
         parse_comment(_comment(invalid))
 
 
+def test_github_comment_parser_round_trips_nested_payload():
+    nested = _event(
+        observation={
+            "check": "targeted recovery scenarios",
+            "results": {"passed": 4, "failed": 0},
+        }
+    )
+
+    parsed = parse_comment(_comment(nested))
+
+    assert parsed is not None
+    assert parsed["observation"] == nested["observation"]
+
+
 def test_github_store_lists_and_appends_structured_comments(repo, monkeypatch):
     existing = _event()
     appended = _event(event_id="evt-appended", summary="Appended fact")
