@@ -78,18 +78,22 @@ def append_jsonl(path: Path, record: dict[str, Any]) -> None:
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     """Read complete records, repairing only an interrupted final append."""
 
-    if not path.exists():
-        return []
-    data = path.read_bytes()
-    if data and not data.endswith(b"\n"):
-        last_newline = data.rfind(b"\n")
-        complete_size = last_newline + 1 if last_newline >= 0 else 0
+    try:
         with path.open("rb+") as stream:
+            # Reading, deciding the repair offset, and truncating must share one
+            # lock. Otherwise a writer can finish an append after our snapshot
+            # and have that valid record removed by a stale repair decision.
             _lock(stream.fileno())
-            stream.truncate(complete_size)
-            stream.flush()
-            os.fsync(stream.fileno())
-        data = data[:complete_size]
+            data = stream.read()
+            if data and not data.endswith(b"\n"):
+                last_newline = data.rfind(b"\n")
+                complete_size = last_newline + 1 if last_newline >= 0 else 0
+                stream.truncate(complete_size)
+                stream.flush()
+                os.fsync(stream.fileno())
+                data = data[:complete_size]
+    except FileNotFoundError:
+        return []
 
     records: list[dict[str, Any]] = []
     for line_number, raw_line in enumerate(data.splitlines(), start=1):

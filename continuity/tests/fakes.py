@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 from continuity.errors import SharedStoreError
-from continuity.shared import validate_event
+from continuity.shared import assert_same_event, validate_event
 
 
 class FakeSharedStore:
@@ -34,6 +34,7 @@ class FakeSharedStore:
                 None,
             )
             if existing is not None:
+                assert_same_event(event, existing)
                 return copy.deepcopy(existing)
             stored = copy.deepcopy(event)
             stored["remote"] = {
@@ -73,8 +74,17 @@ class FakeSharedStore:
 
     def get_current_pull_request(self) -> dict[str, Any]:
         return {
+            "availability": "present",
             "number": 6,
             "title": "Continuity reference implementation",
             "state": "OPEN",
             "url": "https://example.test/pr/6",
+            "checks": {
+                "total": 1,
+                "passed": 1,
+                "pending": 0,
+                "failed": 0,
+                "pending_names": [],
+                "failing_names": [],
+            },
         }

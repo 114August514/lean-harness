@@ -14,7 +14,7 @@ from .recovery import RecoveryLog
 class ProjectFactsSource(Protocol):
     def get_work_item(self, work: str) -> dict[str, Any]: ...
 
-    def get_current_pull_request(self) -> dict[str, Any] | None: ...
+    def get_current_pull_request(self) -> dict[str, Any]: ...
 
 
 class ContextReconstructor:
@@ -24,7 +24,7 @@ class ContextReconstructor:
         self,
         repo: Path,
         work_events: WorkEvents,
-        recovery: RecoveryLog,
+        recovery: RecoveryLog | None,
         project_facts: ProjectFactsSource | None = None,
     ):
         self.repo = Path(repo).resolve()
@@ -39,8 +39,16 @@ class ContextReconstructor:
         *,
         shared_only: bool = False,
     ) -> dict[str, Any]:
-        recovery_status = self.recovery.status()
-        binding = recovery_status["binding"]
+        if shared_only:
+            if work is None:
+                raise RecoveryError("shared-only resume requires an explicit work")
+            recovery_status = None
+            binding = None
+        else:
+            if self.recovery is None:
+                raise RecoveryError("local resume requires a RecoveryLog")
+            recovery_status = self.recovery.status()
+            binding = recovery_status["binding"]
         binding_is_local_input = bool(
             binding and binding.get("status") in {"active", "paused"}
         )
@@ -116,10 +124,15 @@ class ContextReconstructor:
                 ]
 
         if binding_is_local_input and not shared_only:
+            assert recovery_status is not None
+            assert self.recovery is not None
             result["local_recovery"] = {
                 "binding": binding,
                 "latest_intent": recovery_status["latest_intent"],
                 "open_begins": recovery_status["open_begins"],
                 "unexplained_open_begins": recovery_status["unexplained_open_begins"],
+                "pending_handoffs": self.recovery.pending_handoffs(
+                    work=requested_work, cycle_id=requested_cycle
+                ),
             }
         return result

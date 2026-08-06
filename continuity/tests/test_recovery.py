@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import subprocess
+import threading
 
 import continuity.storage as local_storage
 import pytest
 from continuity.git_facts import git_common_dir, structured_status
+from continuity.storage import read_jsonl
 
 from continuity import DamagedStateError, RecoveryError, RecoveryLog
 
@@ -16,7 +20,6 @@ def test_recovery_is_git_metadata_local_and_per_worktree(repo, system, tmp_path)
     _, recovery, _, _ = system
     recovery.bind("issue-5", "cycle-1")
     assert recovery.root.is_relative_to(git_common_dir(repo))
-    assert ".git" in recovery.root.parts
     assert git(repo, "status", "--porcelain") == ""
 
     linked = tmp_path / "linked"
@@ -58,8 +61,8 @@ def test_binding_generation_isolation(repo, system):
     assert first_log.exists()
 
 
-def test_open_begin_blocks_release_and_rebind(repo, system):
-    _, recovery, _, _ = system
+def test_open_begin_requires_end_or_cross_generation_handoff(repo, system):
+    _, recovery, _, context = system
     recovery.bind("issue-5", "cycle-1")
     recovery.begin(
         "publish-unknown",
@@ -70,14 +73,8 @@ def test_open_begin_blocks_release_and_rebind(repo, system):
     recovery.pause()
     with pytest.raises(RecoveryError, match="cannot rebind"):
         recovery.bind("issue-9", "cycle-1")
-
-
-def test_explicit_recoverable_handoff_allows_release(repo, system):
-    _, recovery, _, _ = system
-    recovery.bind("issue-5", "cycle-1")
-    recovery.begin("remote-op", target={"kind": "github", "id": 5})
-    recovery.handoff_open_operation(
-        "remote-op",
+    handoff = recovery.handoff_open_operation(
+        "publish-unknown",
         "Remote result is unknown",
         "Query issue 5 before any retry",
     )
@@ -85,9 +82,18 @@ def test_explicit_recoverable_handoff_allows_release(repo, system):
     assert released["status"] == "released"
     recovery.bind("issue-9", "cycle-1")
     assert recovery.status()["open_begins"] == []
+    pending = recovery.status()["pending_handoffs"]
+    assert [item["handoff_id"] for item in pending] == [handoff["handoff_id"]]
+    assert pending[0]["work"] == "issue-5"
+    assert context.load()["local_recovery"]["pending_handoffs"] == []
+
+    recovery.resolve_handoff(
+        handoff["handoff_id"], {"remote_exists": True, "comment_id": 41}
+    )
+    assert recovery.status()["pending_handoffs"] == []
 
 
-def test_atomic_state_failure_preserves_old_complete_state(repo, system, monkeypatch):
+def test_state_updates_are_atomic_and_damage_is_diagnostic(repo, system, monkeypatch):
     _, recovery, _, _ = system
     original = recovery.bind("issue-5", "cycle-1")
 
@@ -102,17 +108,64 @@ def test_atomic_state_failure_preserves_old_complete_state(repo, system, monkeyp
     assert decoded == original
     assert recovery.status()["binding"]["status"] == "active"
 
-
-def test_damaged_state_becomes_domain_error(repo, system):
-    _, recovery, _, _ = system
-    recovery.bind("issue-5", "cycle-1")
     recovery.state_path.write_text('{"binding_id":', encoding="utf-8")
     with pytest.raises(DamagedStateError, match="damaged recovery state"):
         recovery.status()
 
 
-def test_structured_git_status_preserves_index_worktree_and_rename(repo):
+def test_jsonl_repair_rechecks_tail_after_waiting_for_writer(tmp_path, monkeypatch):
+    path = tmp_path / "recovery.jsonl"
+    writer = path.open("wb")
+    fcntl.flock(writer.fileno(), fcntl.LOCK_EX)
+    writer.write(b'{"record_id":"rec-1"')
+    writer.flush()
+    os.fsync(writer.fileno())
+
+    reader_waiting = threading.Event()
+    original_lock = local_storage._lock
+
+    def announcing_lock(fd):
+        reader_waiting.set()
+        original_lock(fd)
+
+    monkeypatch.setattr(local_storage, "_lock", announcing_lock)
+    result = {}
+
+    def read_records():
+        result["records"] = read_jsonl(path)
+
+    reader = threading.Thread(target=read_records)
+    try:
+        reader.start()
+        assert reader_waiting.wait(timeout=2)
+        writer.write(b',"value":1}\n')
+        writer.flush()
+        os.fsync(writer.fileno())
+    finally:
+        fcntl.flock(writer.fileno(), fcntl.LOCK_UN)
+        writer.close()
+    reader.join(timeout=2)
+
+    assert not reader.is_alive()
+    assert result["records"] == [{"record_id": "rec-1", "value": 1}]
+    assert path.read_bytes().endswith(b"\n")
+
+
+def test_structured_git_status_preserves_index_worktree_rename_and_conflict(repo):
     commit_file(repo, "old.txt", "old\n", "add old path")
+    commit_file(repo, "conflict.txt", "base\n", "add conflict target")
+    git(repo, "checkout", "-qb", "other")
+    commit_file(repo, "conflict.txt", "other\n", "other side")
+    git(repo, "checkout", "-q", "main")
+    commit_file(repo, "conflict.txt", "main\n", "main side")
+    result = subprocess.run(
+        ["git", "-C", str(repo), "merge", "other"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+
     (repo / "README.md").write_text("unstaged\n", encoding="utf-8")
     (repo / "added.py").write_text("staged = True\n", encoding="utf-8")
     git(repo, "add", "added.py")
@@ -129,30 +182,13 @@ def test_structured_git_status_preserves_index_worktree_and_rename(repo):
     assert by_path["added.py"]["worktree_status"] == " "
     assert by_path["new.txt"]["index_status"] == "R"
     assert by_path["new.txt"]["original_path"] == "old.txt"
-
-
-def test_structured_git_status_marks_conflict(repo):
-    commit_file(repo, "conflict.txt", "base\n", "add conflict target")
-    git(repo, "checkout", "-qb", "other")
-    commit_file(repo, "conflict.txt", "other\n", "other side")
-    git(repo, "checkout", "-q", "main")
-    commit_file(repo, "conflict.txt", "main\n", "main side")
-    result = subprocess.run(
-        ["git", "-C", str(repo), "merge", "other"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode != 0
-    conflict = next(
-        change for change in structured_status(repo) if change["path"] == "conflict.txt"
-    )
+    conflict = by_path["conflict.txt"]
     assert conflict["index_status"] == "U"
     assert conflict["worktree_status"] == "U"
     assert conflict["conflict"] is True
 
 
-def test_rotation_requires_a_real_shared_checkpoint(repo, system):
+def test_rotation_enforces_shared_checkpoint_local_and_remote_facts(repo, system):
     _, recovery, events, _ = system
     recovery.bind("issue-5", "cycle-1")
     finding = events.append_significant(
@@ -166,14 +202,9 @@ def test_rotation_requires_a_real_shared_checkpoint(repo, system):
         recovery.rotate(
             finding["event_id"],
             events,
-            durable_events_confirmed=True,
-            next_phase="continue",
+            durable_events_acknowledged=True,
+            next_intent="continue",
         )
-
-
-def test_safe_rotation_validates_shared_checkpoint_and_local_facts(repo, system):
-    _, recovery, events, _ = system
-    recovery.bind("issue-5", "cycle-1")
     checkpoint_commit = commit_file(repo, "work.py", "done = True\n", "coherent")
     checkpoint = events.create_checkpoint(
         "issue-5", "cycle-1", checkpoint_commit, "agent:test"
@@ -184,35 +215,27 @@ def test_safe_rotation_validates_shared_checkpoint_and_local_facts(repo, system)
         recovery.rotate(
             checkpoint["event_id"],
             events,
-            durable_events_confirmed=True,
-            next_phase="verification",
+            durable_events_acknowledged=True,
+            next_intent="verification",
         )
 
-    result = recovery.rotate(
-        checkpoint["event_id"],
-        events,
-        durable_events_confirmed=True,
-        next_phase="verification",
-        local_changes_handling="scratch.txt belongs to the next phase",
-    )
-    assert result["binding"]["base_checkpoint_event_id"] == checkpoint["event_id"]
-    assert result["rotation"]["checkpoint_commit"] == checkpoint_commit
-
-
-def test_rotation_rejects_unexplained_remote_operation(repo, system):
-    _, recovery, events, _ = system
-    recovery.bind("issue-5", "cycle-1")
-    checkpoint = events.create_checkpoint(
-        "issue-5",
-        "cycle-1",
-        git(repo, "rev-parse", "HEAD"),
-        "agent:test",
-    )
     recovery.begin("unknown-write", target={"kind": "github", "id": 5})
     with pytest.raises(RecoveryError, match="unexplained begin"):
         recovery.rotate(
             checkpoint["event_id"],
             events,
-            durable_events_confirmed=True,
-            next_phase="continue",
+            durable_events_acknowledged=True,
+            next_intent="verification",
+            local_changes_handling="scratch.txt belongs to the next phase",
         )
+    recovery.end("unknown-write", {"remote_exists": False})
+
+    result = recovery.rotate(
+        checkpoint["event_id"],
+        events,
+        durable_events_acknowledged=True,
+        next_intent="verification",
+        local_changes_handling="scratch.txt belongs to the next phase",
+    )
+    assert result["binding"]["base_checkpoint_event_id"] == checkpoint["event_id"]
+    assert result["rotation"]["checkpoint_commit"] == checkpoint_commit

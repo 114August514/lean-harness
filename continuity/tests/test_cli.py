@@ -5,38 +5,24 @@ import sys
 from pathlib import Path
 
 
-def test_python_module_entrypoint_smoke():
+def _run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
     root = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
-        [sys.executable, "-m", "continuity", "--help"],
+    return subprocess.run(
+        [sys.executable, "-m", "continuity", *arguments],
         cwd=root / "continuity",
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def test_module_entrypoint_and_local_status_without_github(repo):
+    result = _run_cli("--help")
     assert result.returncode == 0
-    assert "Project-shared work events" in result.stdout
     assert "recovery" in result.stdout
     assert "shared" in result.stdout
     assert "resume" in result.stdout
 
-
-def test_local_recovery_status_does_not_require_a_github_remote(repo):
-    root = Path(__file__).resolve().parents[2]
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "continuity",
-            "--repo",
-            str(repo),
-            "recovery",
-            "status",
-        ],
-        cwd=root / "continuity",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_cli("--repo", str(repo), "recovery", "status")
     assert result.returncode == 0, result.stderr
     assert '"binding": null' in result.stdout

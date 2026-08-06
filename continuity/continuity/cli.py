@@ -89,10 +89,14 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--summary", required=True)
     command.add_argument("--recovery-instructions", required=True)
 
+    command = recovery_commands.add_parser("resolve-handoff")
+    command.add_argument("--handoff-id", required=True)
+    command.add_argument("--observation", required=True, type=_json_object)
+
     command = recovery_commands.add_parser("rotate")
     command.add_argument("--checkpoint-event", required=True)
-    command.add_argument("--durable-events-confirmed", action="store_true")
-    command.add_argument("--next-phase", required=True)
+    command.add_argument("--ack-durable-events-promoted", action="store_true")
+    command.add_argument("--next-intent", required=True)
     command.add_argument("--local-changes-handling")
 
     shared = commands.add_parser("shared", help="read or publish shared Issue events")
@@ -206,14 +210,16 @@ def _run_recovery(
         return recovery.handoff_open_operation(
             args.action_id, args.summary, args.recovery_instructions
         )
+    if command == "resolve-handoff":
+        return recovery.resolve_handoff(args.handoff_id, args.observation)
     if command == "rotate":
         if events is None:
             raise AssertionError("rotation requires shared events")
         return recovery.rotate(
             args.checkpoint_event,
             events,
-            durable_events_confirmed=args.durable_events_confirmed,
-            next_phase=args.next_phase,
+            durable_events_acknowledged=args.ack_durable_events_promoted,
+            next_intent=args.next_intent,
             local_changes_handling=args.local_changes_handling,
         )
     raise AssertionError(command)
@@ -324,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
             _, events = _shared_runtime(args, repo, recovery)
             value = _run_shared(args, events)
         elif args.command == "resume":
-            _, recovery = _local_runtime(args)
+            recovery = None if args.shared_only else RecoveryLog(repo)
             shared, events = _shared_runtime(args, repo, recovery)
             value = ContextReconstructor(
                 repo, events, recovery, project_facts=shared

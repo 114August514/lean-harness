@@ -13,6 +13,7 @@ from .recovery import RecoveryLog, utc_now
 from .shared import (
     SIGNIFICANT_KINDS,
     SharedWorkLogStore,
+    assert_same_event,
     validate_event,
 )
 
@@ -374,6 +375,7 @@ class WorkEvents:
                     }
                 )
                 continue
+            assert_same_event(event, found)
             recovery.end(
                 begin["action_id"],
                 {
@@ -429,6 +431,33 @@ class WorkEvents:
         recovery = self._require_recovery()
         recovery.assert_active_binding(event["work"], event["cycle_id"])
         action_id = f"publish-{event['event_id']}"
+        existing = self.shared.find_event(event["work"], event["event_id"])
+        if existing is not None:
+            assert_same_event(event, existing)
+            pending = next(
+                (
+                    begin
+                    for begin in recovery.open_begins()
+                    if begin.get("action_id") == action_id
+                ),
+                None,
+            )
+            if pending is not None:
+                expected = pending.get("expected_change", {}).get("event")
+                if not isinstance(expected, dict):
+                    raise RecoveryError(
+                        "pending shared-event begin lacks the durable event"
+                    )
+                assert_same_event(expected, existing)
+                recovery.end(
+                    action_id,
+                    {
+                        "shared_event_confirmed": True,
+                        "event_id": event["event_id"],
+                        "response_was_unknown": True,
+                    },
+                )
+            return existing
         recovery.intent(
             f"Publish shared {event['kind']} event {event['event_id']}",
             action_id=action_id,
@@ -444,12 +473,14 @@ class WorkEvents:
             expected_change={"event": copy.deepcopy(event)},
             recovery_check={"find_by_event_id_before_retry": True},
         )
-        self.shared.append_event(event["work"], event)
+        appended = self.shared.append_event(event["work"], event)
+        assert_same_event(event, appended)
         confirmed = self.shared.find_event(event["work"], event["event_id"])
         if confirmed is None:
             raise SharedStoreError(
                 f"shared append returned but event is not observable: {event['event_id']}"
             )
+        assert_same_event(event, confirmed)
         recovery.end(
             action_id,
             {

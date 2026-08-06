@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 import subprocess
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .errors import EventValidationError, SharedStoreError
-from .git_facts import run_git
+from .git_facts import current_branch, run_git
 
 MARKER_VERSION = "v1"
 MARKER_PREFIX = "lean-harness-work-event"
@@ -112,6 +113,38 @@ def validate_event(event: dict[str, Any], expected_work: str | None = None) -> N
         raise EventValidationError("shared event requires summary or observation")
 
 
+def canonical_event_payload(event: dict[str, Any]) -> dict[str, Any]:
+    """Return the immutable event payload, excluding provider metadata."""
+
+    validate_event(event)
+    payload = copy.deepcopy(event)
+    payload.pop("remote", None)
+    return payload
+
+
+def event_payload_digest(event: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        canonical_event_payload(event),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def assert_same_event(expected: dict[str, Any], observed: dict[str, Any]) -> None:
+    """Reject reuse of one event identity for different immutable facts."""
+
+    expected_payload = canonical_event_payload(expected)
+    observed_payload = canonical_event_payload(observed)
+    if expected_payload != observed_payload:
+        raise SharedStoreError(
+            f"event identity conflict for {expected['event_id']}: "
+            f"expected {event_payload_digest(expected)}, "
+            f"observed {event_payload_digest(observed)}"
+        )
+
+
 def render_comment(event: dict[str, Any]) -> str:
     validate_event(event)
     marker = f"<!-- {MARKER_PREFIX}:{MARKER_VERSION} event_id={event['event_id']} -->"
@@ -175,6 +208,56 @@ def _repository_from_origin(repo: Path) -> str:
         if match is not None:
             return match.group(1)
     raise SharedStoreError(f"origin is not a supported GitHub repository URL: {origin}")
+
+
+def _no_pull_request(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        text in lowered
+        for text in (
+            "no pull requests found",
+            "could not find pull request",
+            "no pull request found",
+        )
+    )
+
+
+def _summarize_checks(checks: Any) -> dict[str, Any]:
+    if not isinstance(checks, list):
+        return {
+            "total": 0,
+            "passed": 0,
+            "pending": 0,
+            "failed": 0,
+            "pending_names": [],
+            "failing_names": [],
+        }
+
+    passed = 0
+    pending_names = []
+    failing_names = []
+    successful = {"SUCCESS", "NEUTRAL", "SKIPPED"}
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        name = check.get("name") or check.get("context") or "unnamed-check"
+        status = check.get("status")
+        conclusion = check.get("conclusion")
+        state = check.get("state")
+        if status not in {None, "COMPLETED"} or state == "PENDING":
+            pending_names.append(name)
+        elif conclusion in successful or state == "SUCCESS":
+            passed += 1
+        else:
+            failing_names.append(name)
+    return {
+        "total": passed + len(pending_names) + len(failing_names),
+        "passed": passed,
+        "pending": len(pending_names),
+        "failed": len(failing_names),
+        "pending_names": pending_names,
+        "failing_names": failing_names,
+    }
 
 
 @dataclass
@@ -250,6 +333,7 @@ class GitHubIssueSharedStore:
         validate_event(event, expected_work=work)
         existing = self.find_event(work, event["event_id"])
         if existing is not None:
+            assert_same_event(event, existing)
             return existing
         number = issue_number(work)
         comment = self._gh(
@@ -265,6 +349,7 @@ class GitHubIssueSharedStore:
             raise SharedStoreError(
                 "GitHub created a comment without the work-event marker"
             )
+        assert_same_event(event, parsed)
         return parsed
 
     def get_work_item(self, work: str) -> dict[str, Any]:
@@ -281,27 +366,54 @@ class GitHubIssueSharedStore:
             "url": issue.get("html_url"),
         }
 
-    def get_current_pull_request(self) -> dict[str, Any] | None:
-        result = subprocess.run(
-            [
-                self.gh_binary,
-                "pr",
-                "view",
-                "--repo",
-                str(self.repository),
-                "--json",
-                "number,url,title,state,headRefName,baseRefName,headRefOid,reviewDecision",
-            ],
-            cwd=self.repo,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            return None
+    def get_current_pull_request(self) -> dict[str, Any]:
+        branch = current_branch(self.repo)
+        if branch is None:
+            return {
+                "availability": "unavailable",
+                "reason": "current Git worktree is detached",
+            }
         try:
-            return json.loads(result.stdout)
+            result = subprocess.run(
+                [
+                    self.gh_binary,
+                    "pr",
+                    "view",
+                    branch,
+                    "--repo",
+                    str(self.repository),
+                    "--json",
+                    (
+                        "number,url,title,state,headRefName,baseRefName,headRefOid,"
+                        "mergeStateStatus,reviewDecision,statusCheckRollup"
+                    ),
+                ],
+                cwd=self.repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return {
+                "availability": "unavailable",
+                "reason": "gh executable not found",
+            }
+        if result.returncode != 0:
+            message = result.stderr.strip() or result.stdout.strip()
+            if _no_pull_request(message):
+                return {"availability": "absent", "reason": message}
+            return {"availability": "unavailable", "reason": message}
+        try:
+            pull_request = json.loads(result.stdout)
         except json.JSONDecodeError as error:
-            raise SharedStoreError(
-                f"GitHub returned invalid PR JSON: {error}"
-            ) from error
+            return {
+                "availability": "error",
+                "reason": f"GitHub returned invalid PR JSON: {error}",
+            }
+        if not isinstance(pull_request, dict):
+            return {
+                "availability": "error",
+                "reason": "GitHub returned an unexpected PR shape",
+            }
+        checks = _summarize_checks(pull_request.pop("statusCheckRollup", []))
+        return {"availability": "present", **pull_request, "checks": checks}

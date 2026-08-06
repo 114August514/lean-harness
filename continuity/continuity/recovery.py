@@ -200,13 +200,89 @@ class RecoveryLog:
             raise RecoveryError(f"cannot hand off non-open action_id: {action_id}")
         if not summary.strip() or not recovery_instructions.strip():
             raise RecoveryError("recoverable handoff requires summary and instructions")
+        if any(
+            record.get("type") == "operation-handoff"
+            and record.get("action_id") == action_id
+            for record in self.records()
+        ):
+            raise RecoveryError(f"duplicate handoff for action_id: {action_id}")
         return self._append(
             {
                 "type": "operation-handoff",
+                "handoff_id": f"handoff-{uuid.uuid4().hex}",
                 "action_id": action_id,
                 "summary": summary,
                 "recovery_instructions": recovery_instructions,
             }
+        )
+
+    def pending_handoffs(
+        self,
+        *,
+        work: str | None = None,
+        cycle_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return handed-off operations that remain open across generations."""
+
+        records = self._all_binding_records()
+        begins: dict[tuple[str, str], dict[str, Any]] = {}
+        ended: set[tuple[str, str]] = set()
+        handoffs: list[dict[str, Any]] = []
+        for record in records:
+            binding_id = record.get("binding_id")
+            action_id = record.get("action_id")
+            if not isinstance(binding_id, str) or not isinstance(action_id, str):
+                continue
+            key = (binding_id, action_id)
+            if record.get("type") == "begin":
+                begins[key] = record
+            elif record.get("type") == "end":
+                ended.add(key)
+            elif record.get("type") == "operation-handoff":
+                handoffs.append(record)
+
+        pending = []
+        for handoff in handoffs:
+            key = (handoff["binding_id"], handoff["action_id"])
+            begin = begins.get(key)
+            if begin is None or key in ended:
+                continue
+            if work is not None and handoff.get("work") != work:
+                continue
+            if cycle_id is not None and handoff.get("cycle_id") != cycle_id:
+                continue
+            pending.append({**handoff, "begin": begin})
+        return sorted(pending, key=lambda item: item["recorded_at"])
+
+    def resolve_handoff(
+        self, handoff_id: str, observation: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Record a reliable observation against an archived handed-off begin."""
+
+        matches = [
+            handoff
+            for handoff in self.pending_handoffs()
+            if handoff.get("handoff_id") == handoff_id
+        ]
+        if not matches:
+            raise RecoveryError(f"pending handoff not found: {handoff_id}")
+        if len(matches) != 1:
+            raise RecoveryError(f"duplicate pending handoff identity: {handoff_id}")
+        handoff = matches[0]
+        state = {
+            "binding_id": handoff["binding_id"],
+            "work": handoff["work"],
+            "cycle_id": handoff["cycle_id"],
+        }
+        return self._append_for(
+            state,
+            {
+                "type": "end",
+                "action_id": handoff["action_id"],
+                "observation": observation,
+                "resolved_from_handoff_id": handoff_id,
+                "head_at_record": head_commit(self.repo),
+            },
         )
 
     def records(self) -> list[dict[str, Any]]:
@@ -250,6 +326,7 @@ class RecoveryLog:
             "latest_intent": latest_intent,
             "open_begins": self.open_begins(),
             "unexplained_open_begins": self.unexplained_open_begins(),
+            "pending_handoffs": self.pending_handoffs(),
             "record_count": len(records),
             "recovery_root": str(self.root),
         }
@@ -269,8 +346,8 @@ class RecoveryLog:
         checkpoint_event_id: str,
         work_events: WorkEvents,
         *,
-        durable_events_confirmed: bool,
-        next_phase: str,
+        durable_events_acknowledged: bool,
+        next_intent: str,
         local_changes_handling: str | None = None,
     ) -> dict[str, Any]:
         """Advance the recovery boundary only after validating a shared checkpoint."""
@@ -303,12 +380,12 @@ class RecoveryLog:
             raise RecoveryError(
                 "cannot rotate: local changes are not absorbed or explicitly handled"
             )
-        if not durable_events_confirmed:
+        if not durable_events_acknowledged:
             raise RecoveryError(
-                "cannot rotate: durable shared events have not been confirmed published"
+                "cannot rotate: durable event promotion has not been acknowledged"
             )
-        if not next_phase.strip():
-            raise RecoveryError("cannot rotate: next phase is not explicit")
+        if not next_intent.strip():
+            raise RecoveryError("cannot rotate: next intent is not explicit")
 
         record = self._append(
             {
@@ -317,7 +394,8 @@ class RecoveryLog:
                 "checkpoint_commit": commit,
                 "head_at_rotation": head,
                 "local_changes_handling": local_changes_handling,
-                "next_phase": next_phase,
+                "durable_events_acknowledged": True,
+                "next_intent": next_intent,
             }
         )
         updated = {
@@ -325,13 +403,22 @@ class RecoveryLog:
             "base_checkpoint_event_id": checkpoint_event_id,
             "base_checkpoint_commit": commit,
             "rotated_at": utc_now(),
-            "next_phase": next_phase,
+            "next_intent": next_intent,
         }
         atomic_write_json(self.state_path, updated)
         return {"binding": updated, "rotation": record}
 
     def _state(self) -> dict[str, Any] | None:
         return read_json(self.state_path)
+
+    def _all_binding_records(self) -> list[dict[str, Any]]:
+        bindings = self.root / "bindings"
+        if not bindings.exists():
+            return []
+        records = []
+        for path in sorted(bindings.glob("*/recovery.jsonl")):
+            records.extend(read_jsonl(path))
+        return records
 
     def _require_current(self, *, allow_paused: bool = False) -> dict[str, Any]:
         state = self._state()

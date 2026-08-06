@@ -101,6 +101,11 @@ issue-5 generation
 
 旧 generation 可以保留用于诊断，但不得进入当前恢复输入。
 
+唯一例外是仍未获得可靠 observation 的 operation handoff：它属于 worktree 级
+`pending_handoffs` 安全视图，必须跨 generation 保持可发现，直到按稳定
+`handoff_id` 把 observation / `end` 记录回原 binding。它不得作为新 work/cycle 的
+intent 混入 Context Reconstruction，但必须继续由 `recovery status` 暴露。
+
 ### intent / begin / end
 
 普通本地工作只记录 `intent`。只有结果不透明或不可安全重复的副作用才使用：
@@ -127,6 +132,10 @@ intent → durable begin → side effect → reliable observation → end
 - 查询真实目标并记录 observation + `end`；或
 - 记录明确、可恢复的 operation handoff，包含下一位协作者可执行的查询/恢复步骤。
 
+handoff 允许 release / rebind 后，组件仍必须跨 generation 暴露该 unresolved
+operation，并提供把可靠 observation 关联回原 begin 的领域操作。归档旧 journal
+不能使 handoff 从正常恢复入口消失。
+
 调用方不能用 `force` 绕过该不变量。
 
 ### 持久化安全
@@ -141,6 +150,8 @@ temporary file → flush → fsync → atomic replace → directory fsync
 错误的状态必须变成可诊断 domain error，不得暴露裸 `JSONDecodeError`。
 
 append-only recovery journal 的最后一条半写记录可以截断；中间损坏必须报错。
+读取尾部、判断 repair offset 和执行 truncate 必须处于同一互斥区间，repair 不得
+依据加锁前的旧快照删除并发 writer 已经完成的记录。
 
 ## Project-shared Work Log
 
@@ -210,6 +221,10 @@ find_event(work, event_id)
 
 `event_id` 是稳定事件身份。多个协作者可以对同一 Issue 并发追加不同 event_id。
 不得用本地计算的整数 `seq` 表达全 Project 顺序，也不建立全局序列分配器。
+
+相同 `event_id` 与相同 canonical payload 表示幂等重复；相同 `event_id` 与不同
+payload 表示身份冲突，必须产生可诊断错误。append confirmation 和 response-loss
+reconciliation 都必须比较预期事件与远端事件，不能只确认 identity 存在。
 
 展示和 checkpoint 后增量读取使用共享 comment 返回顺序；因果关系使用稳定引用。
 解决关系必须写成：
@@ -282,8 +297,12 @@ rotation 接受 `checkpoint_event_id`，并验证：
 - commit 是当前 HEAD 的 ancestor，位于当前 artifact path；
 - staged / unstaged / conflict / rename 等本地修改已被吸收或有明确处理；
 - 没有未解释的远端操作；
-- 需要长期保留的共享事件已经确认发布；
-- 下一阶段明确。
+- 调用方已明确 acknowledgement：其判断需要长期保留的事件已经提升；
+- 调用方给出的下一项 intent 非空。
+
+最后两项是 continuity 保存的调用方 observation，不是组件对工程意义的独立证明。
+哪些事件值得提升、commit 是否 coherent、下一项 intent 是否合适仍由 Skills / owner
+判断。CLI 使用 `--ack-durable-events-promoted` 和 `--next-intent` 明确这一区别。
 
 “commit 是 HEAD 的 ancestor”只是必要条件，不是全部条件。rotation 不得提供
 `--force` 绕过上述语义。
@@ -326,7 +345,13 @@ conflict
 ```
 
 显式 `resume --work X --cycle Y` 与活跃/暂停的本地 binding 不一致时必须拒绝。
-调用方可显式请求 `shared_only`，此时只加载共享与 Git 上下文，不混入本地日志。
+调用方可显式请求 `shared_only`，此时只加载共享与 Git 上下文，不创建
+`RecoveryLog`、不读取本地 state、不创建 worktree identity，也不从本地 binding
+推导 work / cycle。shared-only resume 至少需要显式 work。
+
+PR facts 必须区分 `present`、`absent`、`unavailable` 和解析 `error`。最低读取范围
+只包括恢复所需的 PR identity/state、base/head、head SHA、merge state、review
+decision 和当前 checks 摘要；不复制完整 review comments、check logs 或 PR 时间线。
 
 fresh clone 没有上一位协作者的 Recovery Log 是正常现象。Issue / Spec + Git / PR +
 Shared Work Log 必须足以恢复 checkpoint、方向变化、Evidence、Review Finding、
@@ -343,6 +368,7 @@ shared unresolved
 shared latest-checkpoint
 resume
 recovery status
+recovery resolve-handoff
 ```
 
 参考实现以 uv 管理 Python 环境，但不是需要构建或安装的发布 package：
@@ -382,18 +408,21 @@ Skills 判断哪些事实重要、checkpoint 是否 coherent、Evidence 是否�
 
 ## 验收场景
 
-参考实现必须以自动化测试覆盖：
+参考实现使用最小、非重复的自动化场景集合覆盖：
 
-1. 本地 intent + 未提交修改可由 replacement 恢复；
-2. coherent commit 发布共享 checkpoint 后可安全 rotation；
-3. 远端 append 成功但响应丢失时按 event_id 补 end，不重复 append；
-4. 两个独立 clone 仅共享 Issue / Git / PR / Work Log 即可交接并形成下一 checkpoint；
-5. 新 binding 不读取旧 generation，open begin 阻止 release / rebind；
-6. squash / rebase remap 可由 fresh clone 解析；
-7. state 更新中断保留旧完整状态，损坏状态产生 domain error；
-8. 两位协作者的不同 event_id 都保留，resolves 使用 event_id；
-9. structured Git status 保留 index / worktree / rename / conflict；
-10. rotation 拒绝非共享显式 checkpoint。
+1. 本地 intent、未提交修改和 structured Git status 可由 replacement 恢复；
+2. shared event 发布在响应丢失后按 event_id 恢复，且身份冲突不会被误认为幂等；
+3. 两个独立 clone 可从共享 checkpoint、后续事件和 unresolved 事件交接并继续；
+4. binding generation 隔离，open begin 阻止 release/rebind，可恢复 handoff 跨
+   generation 保持可见；
+5. squash / rebase remap 保持 append-only，并可由 fresh clone 解析；
+6. binding state 和 recovery journal 在中断、损坏与并发 repair 下保持可诊断；
+7. rotation 验证显式 shared checkpoint、本地修改和未知远端操作；
+8. GitHub adapter 的 comment protocol 与最小 PR facts/availability 可确定性验证；
+9. CLI 入口和 shared-only / local-only 边界可执行。
+
+同一规则优先只在最接近其责任的稳定层级测试；只有跨模块连接本身构成实质风险时
+才增加 E2E，不在 fake、adapter 和 E2E 层机械重复完整场景。
 
 验证证据至少包括全量 tests、lint、compile/static check 和 CLI smoke test。
 

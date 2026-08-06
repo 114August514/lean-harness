@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from continuity.git_facts import git_common_dir
+from continuity.git_facts import git_common_dir, git_dir
 
 from continuity import ContextReconstructor, RecoveryError, RecoveryLog, WorkEvents
 
@@ -40,9 +40,20 @@ def test_explicit_resume_never_mixes_a_different_binding(repo, system):
     with pytest.raises(RecoveryError, match="does not match local recovery"):
         context.load("issue-9", "cycle-1")
 
-    shared_only = context.load("issue-9", "cycle-1", shared_only=True)
-    assert shared_only["work"] == "issue-9"
-    assert shared_only["local_recovery"] is None
+
+def test_shared_only_resume_does_not_create_worktree_identity(repo):
+    shared = FakeSharedStore()
+    events = WorkEvents(repo, shared)
+    identity_path = git_dir(repo) / "lean-harness" / "worktree.json"
+    assert not identity_path.exists()
+
+    context = ContextReconstructor(
+        repo, events, recovery=None, project_facts=shared
+    ).load("issue-5", "cycle-1", shared_only=True)
+
+    assert context["work"] == "issue-5"
+    assert context["local_recovery"] is None
+    assert not identity_path.exists()
 
 
 def _independent_clones(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -192,6 +203,7 @@ def test_checkpoint_remap_is_readable_from_a_fresh_clone(repo, system, tmp_path)
         "collaborator:a",
         event_id="evt-squash-remap",
     )
+    assert events.find_event("issue-5", checkpoint["event_id"])["commit"] == old_commit
 
     remote = tmp_path / "history.git"
     clone_b = tmp_path / "fresh-clone"

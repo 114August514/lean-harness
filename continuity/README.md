@@ -70,35 +70,31 @@ uv run python -m continuity shared remap-checkpoint \
   --reason squash --producer agent:example
 ```
 
-每次共享写入实际执行：
-
-```text
-event_id → local intent → local begin → Issue comment append
-→ find(event_id) confirmation → local end
-```
-
-响应丢失后，replacement 先运行：
+发布、幂等身份与未知远端结果的完整语义见
+[`contract.md`](contract.md) 的“Shared event 发布与未知远端结果”。响应丢失后可运行：
 
 ```bash
 uv run python -m continuity shared reconcile
 ```
 
-它只按 `event_id` 查询并补 `end`，不会自动重试。确认远端不存在后，才可显式
-增加 `--retry-missing`。
+默认只查询并补充 observation；确认远端不存在后，才可显式增加
+`--retry-missing`。
 
 ## 本地恢复与轮转
 
 ```bash
 uv run python -m continuity recovery intent --action "implement parser"
 uv run python -m continuity recovery status
+uv run python -m continuity recovery resolve-handoff \
+  --handoff-id handoff-... --observation '{"remote_exists": true}'
 uv run python -m continuity recovery rotate \
   --checkpoint-event evt-checkpoint \
-  --durable-events-confirmed \
-  --next-phase verification
+  --ack-durable-events-promoted \
+  --next-intent verification
 ```
 
-rotation 会验证共享 checkpoint 的 work / cycle / resolved commit、当前 Git 路径、
-structured dirty state、未解释的远端操作、长期事件确认和下一阶段。没有 `--force`。
+完整的 binding、handoff、checkpoint 与 rotation 不变量见
+[`contract.md`](contract.md) 的“Local Recovery Log”和“Checkpoint、rotation 与历史改写”。
 
 ## 验证
 

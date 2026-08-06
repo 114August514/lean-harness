@@ -1,34 +1,26 @@
 from __future__ import annotations
 
-import threading
-
 import pytest
-from continuity.recovery import utc_now
 from continuity.shared import parse_comment, render_comment
 
 from continuity import EventValidationError, SharedStoreError, WorkEvents
 
-from .conftest import commit_file, git
-from .fakes import FakeSharedStore
+from .conftest import git
 
 
-def test_github_comment_is_machine_identifiable_and_human_readable(repo, system):
-    _, recovery, events, _ = system
-    recovery.bind("issue-5", "cycle-1")
-    event = events.create_checkpoint(
-        "issue-5",
-        "cycle-1",
-        git(repo, "rev-parse", "HEAD"),
-        "agent:test",
-        summary="Complete shared work-log reference implementation",
-        event_id="evt-comment-format",
-    )
-
-    body = render_comment(
-        {key: value for key, value in event.items() if key != "remote"}
-    )
+def test_github_comment_is_machine_identifiable_and_human_readable():
+    event = {
+        "event_id": "evt-comment-format",
+        "kind": "finding",
+        "work": "issue-5",
+        "cycle_id": "cycle-1",
+        "producer": "agent:test",
+        "created_at": "2026-08-06T00:00:00Z",
+        "summary": "Human-readable durable fact",
+    }
+    body = render_comment(event)
     assert "<!-- lean-harness-work-event:v1 event_id=evt-comment-format -->" in body
-    assert "Complete shared work-log reference implementation" in body
+    assert "Human-readable durable fact" in body
     parsed = parse_comment(
         {
             "id": 41,
@@ -60,7 +52,6 @@ def test_structural_event_cannot_bypass_domain_operation(repo, system):
         "agent:test",
     )
     assert checkpoint["kind"] == "checkpoint-created"
-    assert "seq" not in checkpoint
 
 
 def test_shared_append_response_loss_is_reconciled_by_event_id(repo, system):
@@ -95,10 +86,10 @@ def test_shared_append_response_loss_is_reconciled_by_event_id(repo, system):
     assert recovery.open_begins() == []
 
 
-def test_unresolved_and_resolves_use_event_identity(repo, system):
+def test_collaborator_events_and_resolves_use_stable_identity(repo, system):
     _, recovery, events, _ = system
     recovery.bind("issue-5", "cycle-1")
-    finding = events.append_significant(
+    events.append_significant(
         "issue-5",
         "cycle-1",
         "finding",
@@ -107,7 +98,19 @@ def test_unresolved_and_resolves_use_event_identity(repo, system):
         unresolved=True,
         event_id="evt-finding",
     )
-    assert events.unresolved_events("issue-5") == [finding]
+    other = events.append_significant(
+        "issue-5",
+        "cycle-1",
+        "finding",
+        "agent:b",
+        summary="A second collaborator found another risk",
+        unresolved=True,
+        event_id="evt-other-risk",
+    )
+    assert {event["event_id"] for event in events.events("issue-5")} == {
+        "evt-finding",
+        "evt-other-risk",
+    }
 
     resolution = events.resolve_event(
         "issue-5",
@@ -118,61 +121,5 @@ def test_unresolved_and_resolves_use_event_identity(repo, system):
         event_id="evt-resolution",
     )
     assert resolution["resolves"] == ["evt-finding"]
-    assert events.unresolved_events("issue-5") == []
+    assert events.unresolved_events("issue-5") == [other]
     assert all("seq" not in event for event in events.events("issue-5"))
-
-
-def test_two_collaborators_append_without_a_global_sequence():
-    shared = FakeSharedStore()
-    barrier = threading.Barrier(3)
-
-    def append(event_id: str, producer: str) -> None:
-        event = {
-            "event_id": event_id,
-            "kind": "finding",
-            "work": "issue-5",
-            "cycle_id": "cycle-1",
-            "producer": producer,
-            "created_at": utc_now(),
-            "summary": producer,
-            "unresolved": True,
-        }
-        barrier.wait()
-        shared.append_event("issue-5", event)
-
-    workers = [
-        threading.Thread(target=append, args=("evt-a", "collaborator:a")),
-        threading.Thread(target=append, args=("evt-b", "collaborator:b")),
-    ]
-    for worker in workers:
-        worker.start()
-    barrier.wait()
-    for worker in workers:
-        worker.join()
-
-    events = shared.list_events("issue-5")
-    assert {event["event_id"] for event in events} == {"evt-a", "evt-b"}
-    assert all("seq" not in event for event in events)
-
-
-def test_checkpoint_remap_is_append_only(repo, system):
-    _, recovery, events, _ = system
-    recovery.bind("issue-5", "cycle-1")
-    old = git(repo, "rev-parse", "HEAD")
-    checkpoint = events.create_checkpoint(
-        "issue-5", "cycle-1", old, "agent:a", event_id="evt-checkpoint"
-    )
-    new = commit_file(repo, "new.py", "value = 1\n", "replacement artifact")
-    remap = events.remap_checkpoint(
-        "issue-5",
-        "cycle-1",
-        checkpoint["event_id"],
-        new,
-        "squash",
-        "agent:a",
-        event_id="evt-remap",
-    )
-
-    assert events.find_event("issue-5", "evt-checkpoint")["commit"] == old
-    assert remap["old_commit"] == old
-    assert events.resolve_checkpoint_event(checkpoint) == new
