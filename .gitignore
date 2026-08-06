@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Lean Harness 恢复日志：绑定具体 worktree，不进入 index / commit / PR
+docs/journal/recovery/

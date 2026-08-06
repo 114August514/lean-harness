@@ -138,8 +138,24 @@ Remediation 使用上述特化工作包，不得借修复之名
 
 ---
 
+## 与连续性的关系
+
+工作连续性（检查点、恢复日志、工作日志、上下文恢复）的权威定义见
+`continuity/contract.md`。本文件只规定 Skills 在生命周期中何时与连续性组件交互，
+不复述其语义。
+
+- 执行 Skill 在形成可验证候选结果时，应确保当前 intent 已记录，
+  结果不透明的外部操作已有 `begin / end`；
+- `finish-work` 在输出最终状态前，按 `continuity/contract.md` 第九节
+  检查恢复日志和检查点状态；
+- worker 与主 Agent 之间的候选工作事件交接，见
+  `skills/_shared/delegation-contract.md`。
+
+---
+
 ## 与其他文件的关系
 
 - 工作单元的目标与验收格式：`skills/_shared/work-unit-contract.md`
 - 主 Agent 与 worker 之间的交接格式：`skills/_shared/delegation-contract.md`
+- 工作连续性（检查点、恢复日志、工作日志）的权威定义：`continuity/contract.md`
 - 最终状态的具体语义以 `policy/working-contract.md` 的"完成语义"为准。

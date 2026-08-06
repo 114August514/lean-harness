@@ -126,7 +126,17 @@ verify
 
    等待确认前应先完成所有仍可独立、安全完成的客观工作。
 
-9. **输出最终状态。** 只输出三个之一：
+9. **连续性检查。** 当工作单元已接入工作连续性（`continuity/contract.md`）时，
+   输出最终状态前确认：
+
+   - 没有未解释的 `begin`（无 `end` 的外部操作已查询真实状态并处理）；
+   - dirty working tree 已被理解：已 commit、已明确交接或已有下一步 intent；
+   - 重要工件已经形成检查点，或未提交现场已明确交接；
+   - 当前 Evidence 对应当前工件；
+   - 具有长期价值的事件已经写入工作日志；
+   - 具有约束力的决定没有只停留在日志中，已提升到 Issue / Spec / Policy / PR。
+
+10. **输出最终状态。** 只输出三个之一：
 
    #### DONE
 
@@ -196,4 +206,5 @@ HANDOFF  + 最小 HANDOFF 内容（见上）
 - `policy/decision-boundaries.md` — BLOCKED 判定、请求人类决策的方式；
 - `skills/_shared/work-lifecycle.md` — 责任顺序与必要规则；
 - `skills/_shared/work-unit-contract.md` — Acceptance mode；
-- `skills/_shared/delegation-contract.md` — remediation 委派的格式基础。
+- `skills/_shared/delegation-contract.md` — remediation 委派的格式基础；
+- `continuity/contract.md` — 完成阶段的连续性检查（第九节）。
