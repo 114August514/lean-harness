@@ -21,7 +21,7 @@ compare-before-mutate 语义和结构化错误分类。差距在 mutation 执行
 来源：`modelcontextprotocol/servers` → `src/git`
 
 | 维度 | 结论 | 关键证据 |
-|---|---|---|
+| -- | --- | --- |
 | 仓库边界 | 部分满足 | `--repository` 为 opt-in；无 linked worktree 感知 |
 | 结构化事实 | 不满足 | 全部输出为人类可读文本 |
 | Mutation 边界 | 部分满足 | 单用途 tool，但无前置检查和操作后重读 |
@@ -36,7 +36,7 @@ compare-before-mutate 语义和结构化错误分类。差距在 mutation 执行
 来源：`blak0p/git-courer`
 
 | 维度 | 结论 | 关键证据 |
-|---|---|---|
+| --- | --- | --- |
 | 仓库边界 | 满足 | 固定单仓库 scope；无 per-call path 参数 |
 | 结构化事实 | 部分满足 | status/history 为结构化 JSON；diff 为文本；无 detached/unborn 枚举；无 ignored 枚举；无 in-progress 字段 |
 | Mutation 边界 | 不满足 | 工具捆绑多个 mutation（branch CREATE+switch+stash+pop；integrate MERGE+delete+push）；无 before→单 mutation→after 模式 |
@@ -50,7 +50,7 @@ compare-before-mutate 语义和结构化错误分类。差距在 mutation 执行
 ### github-mcp-server（仅边界确认）
 
 | 能力 | 确认 |
-|---|---|
+| --- | --- |
 | Toolsets | ✅ `--toolsets` / `X-MCP-Toolsets` |
 | 单工具过滤 | ✅ `--tools` / `--exclude-tools` |
 | 只读模式 | ✅ `--read-only` / `X-MCP-Readonly` |
