@@ -9,7 +9,7 @@
 
 - 保存、读取和组合事实；
 - 保护结果不透明且不可安全重复的副作用；
-- 把显式 coherent checkpoint 与普通 commit 区分；
+- 把显式发布的 checkpoint 与普通 commit 区分；
 - 提供 replacement context。
 
 连续性组件不负责判断：
@@ -27,7 +27,7 @@ Facts、Context Reconstruction 和 Observable Interface。Artifact Facts 覆盖 
 Spec、repository/worktree、Git 工件、PR、Review 与 Checks 的当前事实。
 
 identity、canonical encoding、domain errors、atomic local storage 和 external command
-execution 是支撑这些能力的横切机制，不构成额外领域层或通用基础设施系统。
+execution 是支撑这些能力的通用机制，不构成额外领域层或基础设施系统。
 
 ## 三层事实模型
 
@@ -54,8 +54,8 @@ Issue / Spec
 + 当前 Git / PR
 + 最近可达的共享 checkpoint
 + checkpoint 后的共享工作事件
-+ 较早但仍 unresolved 的共享事件
-+ 当前 worktree、当前 binding generation 的本地恢复日志
++ 较早但仍未解决的共享事件
++ 当前 worktree、当前 binding 的本地恢复日志
 → replacement context
 ```
 
@@ -85,7 +85,7 @@ Recovery Log：
 
 ### Binding generation
 
-每次 `bind` 产生新的稳定 `binding_id`，并创建独立 append-only journal。所有记录
+每次 `bind` 产生新的稳定 `binding_id`，并创建独立的只追加日志文件。所有记录
 必须包含当前：
 
 ```text
@@ -95,7 +95,7 @@ cycle_id
 ```
 
 包括 `bound`、`intent`、`begin`、`end`、operation handoff、pause、release 和
-rotation。读取 `latest_intent` 或 `open_begins` 时只扫描当前 binding journal。
+rotation。读取 `latest_intent` 或 `open_begins` 时只扫描当前 binding 的日志。
 
 因此：
 
@@ -109,7 +109,7 @@ issue-5 generation
 旧 generation 可以保留用于诊断，但不得进入当前恢复输入。
 
 唯一例外是仍未获得可靠 observation 的 operation handoff：它属于 worktree 级
-`pending_handoffs` 安全视图，必须跨 generation 保持可发现，直到按稳定
+`pending_handoffs` 安全视图，必须跨 binding 保持可发现，直到按稳定
 `handoff_id` 把 observation / `end` 记录回原 binding。它不得作为新 work/cycle 的
 intent 混入 Context Reconstruction，但必须继续由 `recovery status` 暴露。
 
@@ -139,8 +139,8 @@ intent → durable begin → side effect → reliable observation → end
 - 查询真实目标并记录 observation + `end`；或
 - 记录明确、可恢复的 operation handoff，包含下一位协作者可执行的查询/恢复步骤。
 
-handoff 允许 release / rebind 后，组件仍必须跨 generation 暴露该 unresolved
-operation，并提供把可靠 observation 关联回原 begin 的领域操作。归档旧 journal
+handoff 允许 release / rebind 后，组件仍必须跨 binding 暴露该未解决
+operation，并提供把可靠 observation 关联回原 begin 的领域操作。归档旧日志
 不能使 handoff 从正常恢复入口消失。
 
 调用方不能用 `force` 绕过该不变量。
@@ -156,12 +156,12 @@ temporary file → flush → fsync → atomic replace → directory fsync
 更新中断后，读取方要么看到旧完整状态，要么看到新完整状态。损坏、不完整或类型
 错误的状态必须变成可诊断 domain error，不得暴露裸 `JSONDecodeError`。
 
-append-only recovery journal 的最后一条半写记录可以截断；中间损坏必须报错。
-读取尾部、判断 repair offset 和执行 truncate 必须处于同一互斥区间，repair 不得
+只追加日志文件的最后一条半写记录可以截断；中间损坏必须报错。
+读取尾部、判断修复位置和执行截断必须处于同一互斥区间，修复不得
 依据加锁前的旧快照删除并发 writer 已经完成的记录。
 
-首次创建 journal 时必须同步其目录项。bind、begin/end、release、rebind 和 rotation
-这类“读取不变量再更新”的复合操作必须使用同一 worktree-local 文件锁；不支持所需
+首次创建日志文件时必须同步其目录项。bind、begin/end、release、rebind 和 rotation
+这类"读取不变量再更新"的复合操作必须使用同一 worktree 本地文件锁；不支持所需
 锁语义的本地文件系统必须报错，不能静默降级。该锁只保护一个 clone/worktree 的
 Recovery，不是 distributed lock。
 
@@ -172,15 +172,17 @@ Recovery，不是 distributed lock。
 当前 GitHub 项目使用 Issue 中的结构化 work-event comments。一个长期事件对应一条
 comment，comment 同时具有：
 
-- 稳定 HTML machine marker；
+- 稳定 HTML 机器标记；
 - 人类可直接阅读的 kind 与 summary；
-- fenced JSON payload。
+- 带围栏的 JSON payload。
 
 marker 形如：
 
 ```html
 <!-- lean-harness-work-event:v1 event_id=evt-... -->
 ```
+
+payload 是 marker 行之后紧跟的 ` ```json ` 围栏内容。
 
 事件至少包含：
 
@@ -192,13 +194,13 @@ cycle_id
 producer
 created_at
 summary or observation
-artifact identity when relevant
+artifact identity（相关时）
 references / resolves when relevant
 ```
 
 `checkpoint-created`、`checkpoint-remapped`、`event-resolved`、
 `verification-observed` 和 `work-reopened` 是具有专用领域不变量的结构性 kind，必须
-通过对应操作形成。普通 significant event 的 kind 不由 continuity 建立封闭枚举；
+通过对应操作形成。普通重要事件的 kind 不由 continuity 建立封闭枚举；
 Skills / owner 判断其意义和是否值得发布，continuity 只要求它具有合法的基础结构。
 
 示例：
@@ -229,7 +231,7 @@ find_event(work, event_id)
 实现为：
 
 - GitHub Issue shared store；
-- deterministic fake shared store for tests。
+- 测试用的确定性 fake shared store。
 
 port 的输入是领域层已经验证的 canonical event；实现必须在远端数据进入进程时验证
 marker、payload、partition 和 provider response，并只向领域层返回已验证事件。同一
@@ -243,7 +245,7 @@ marker、payload、partition 和 provider response，并只向领域层返回已
 ### 身份、顺序与解决关系
 
 `event_id` 是稳定事件身份。多个协作者可以对同一 Issue 并发追加不同 event_id。
-不得用本地计算的整数 `seq` 表达全 Project 顺序，也不建立全局序列分配器。
+不得用本地计算的整数序号表达全 Project 顺序，也不建立全局序列分配器。
 
 相同 `event_id` 与相同 canonical payload 表示幂等重复；相同 `event_id` 与不同
 payload 表示身份冲突，必须产生可诊断错误。append confirmation 和 response-loss
@@ -268,7 +270,7 @@ exactly-once。相同 identity/payload 的物理 comment 在读取时折叠为�
 ### 写入所有权与正式决定
 
 共享 Work Log 保存稀疏、长期有价值的事实：发生了什么、基于哪个工件、正式决定
-在哪里、哪些问题仍 unresolved。它不是唯一事实库，也不是 Event Sourcing。
+在哪里、哪些问题仍未解决。它不是唯一事实库，也不是 Event Sourcing。
 
 具有约束力的内容必须提升到 Issue、Spec、Policy、Decision Record 或 PR 中明确
 保留的决定。协作者或 worker 产生候选事件时，负责吸收结果的 owner 决定哪些事件
@@ -310,12 +312,12 @@ GitHub comment API 不提供 event identity 的原子唯一性。GitHub adapter 
 
 公共能力必须区分：
 
-- append ordinary significant event；
-- create checkpoint；
+- 追加普通重要事件；
+- 创建 checkpoint；
 - remap checkpoint；
-- reopen work；
-- resolve event；
-- record verification observation。
+- 重新打开 work；
+- 解决 event；
+- 记录验证观察。
 
 generic append 不得构造结构性事件。
 
@@ -326,10 +328,10 @@ rotation 接受 `checkpoint_event_id`，并验证：
 - 事件从 shared store 真实读取且 kind 为 `checkpoint-created`；
 - event 的 work / cycle 与当前 binding 一致；
 - remap 后 commit 在本地存在；
-- commit 是当前 HEAD 的 ancestor，位于当前 artifact path；
+- commit 是当前 HEAD 的祖先，位于当前工件路径；
 - staged / unstaged / conflict / rename 等本地修改已被吸收或有明确处理；
 - 没有未解释的远端操作；
-- 调用方已明确 acknowledgement：其判断需要长期保留的事件已经提升；
+- 调用方已明确确认：其判断需要长期保留的事件已经提升；
 - 调用方给出的下一项 intent 非空。
 
 rotation 推进边界的同时原子地写入一条 `intent` record，使 `latest_intent` 立即
@@ -337,10 +339,10 @@ rotation 推进边界的同时原子地写入一条 `intent` record，使 `lates
 独立的意图来源。
 
 最后两项是 continuity 保存的调用方 observation，不是组件对工程意义的独立证明。
-哪些事件值得提升、commit 是否 coherent、下一项 intent 是否合适仍由 Skills / owner
+哪些事件值得提升、commit 是否完整、下一项 intent 是否合适仍由 Skills / owner
 判断。CLI 使用 `--ack-durable-events-promoted` 和 `--next-intent` 明确这一区别。
 
-“commit 是 HEAD 的 ancestor”只是必要条件，不是全部条件。rotation 不得提供
+"commit 是 HEAD 的祖先"只是必要条件，不是全部条件。rotation 不得提供
 `--force` 绕过上述语义。
 
 ### remap
@@ -355,7 +357,7 @@ new_commit
 reason
 ```
 
-解析从 checkpoint identity 开始沿 append-only remap chain 前进。fresh clone 必须
+解析从 checkpoint identity 开始沿只追加的 remap chain 前进。fresh clone 必须
 仅凭 Git 和共享日志解析到新 commit。
 
 同一 checkpoint 与 `old_commit` 可以有多条指向相同 `new_commit` 的物理/逻辑记录；
@@ -369,10 +371,10 @@ Context Reconstruction 只收集和组合：
 - Issue / Spec facts；
 - 当前 PR facts；
 - `git status --porcelain=v1 -z` 的结构化现场；
-- 最近可达、当前 cycle 的共享 checkpoint（按 Git ancestry 取 descendant-most）；
+- 当前 cycle 中、从 HEAD 可达的最近共享 checkpoint（按 Git 祖先关系取最靠后者）；
 - checkpoint 后的共享事件；
-- checkpoint 之前仍 unresolved 的共享事件；
-- 当前 worktree 当前 binding generation 的 local intent / open begins。
+- checkpoint 之前仍未解决的共享事件；
+- 当前 worktree 当前 binding 的本地 intent / open begins。
 
 Git change 至少包含：
 
@@ -397,7 +399,7 @@ check logs 或 PR 时间线。
 
 fresh clone 没有上一位协作者的 Recovery Log 是正常现象。Issue / Spec + Git / PR +
 Shared Work Log 必须足以恢复 checkpoint、方向变化、Evidence、Review Finding、
-HANDOFF 和 unresolved 工作；新协作者随后建立自己的 binding。
+HANDOFF 和未解决工作；新协作者随后建立自己的 binding。
 
 ## CLI 与可观察性
 
@@ -422,29 +424,29 @@ uv run python -m continuity --help
 
 写入操作使用 dedicated subcommand；本地 `recovery status` 不依赖 GitHub remote。
 CLI/API 的错误也是可观察输出，必须保留 corruption、identity conflict、binding /
-checkpoint mismatch 与 artifact unavailable 的差异，不能统一降级成空值。
+checkpoint mismatch 与工件不可用的差异，不能统一降级成空值。
 
 ## Skills、完成检查与 Git 最小不变量
 
-Skills 判断哪些事实重要、checkpoint 是否 coherent、Evidence 是否支持 Claim，以及
+Skills 判断哪些事实重要、checkpoint 是否完整、Evidence 是否支持 Claim，以及
 最终状态；continuity 保存、读取和组合事实。
 
 完成阶段至少确认：
 
 - 没有未解释的 `begin`；
 - dirty working tree 已 commit、明确处理或形成可恢复 handoff；
-- coherent checkpoint 已作为共享事件发布，或未稳定现场仍被本地 recovery 保护；
-- Evidence 对应当前 artifact；
+- 完整 checkpoint 已作为共享事件发布，或未稳定现场仍被本地 recovery 保护；
+- Evidence 对应当前工件；
 - 长期事件已经发布；
 - 正式决定没有只停留在 Work Log。
 
 本契约依赖的 Git 最小不变量只有：
 
 - 每位并发执行者使用隔离 worktree；
-- checkpoint 必须 explicit 且 coherent；
-- commit reachability 是 artifact 相关性的必要事实；
+- checkpoint 必须显式发布且完整；
+- commit 可达性是工件相关性的必要事实；
 - staged / unstaged / conflict / rename 状态必须保留；
-- rebase / squash 使用 append-only remap；
+- rebase / squash 使用只追加 remap；
 - Recovery Log 不进入 Git；
 - Shared Work Log 不属于任何 branch。
 
@@ -454,13 +456,12 @@ Skills 判断哪些事实重要、checkpoint 是否 coherent、Evidence 是否�
 
 参考实现使用最小、非重复的自动化场景集合覆盖：
 
-1. 本地 intent、未提交修改和 structured Git status 可由 replacement 恢复；
+1. 本地 intent、未提交修改和结构化 Git status 可由 replacement 恢复；
 2. shared event 发布在响应丢失后按 event_id 恢复，且身份冲突不会被误认为幂等；
-3. 两个独立 clone 可从共享 checkpoint、后续事件和 unresolved 事件交接并继续；
-4. binding generation 隔离，open begin 阻止 release/rebind，可恢复 handoff 跨
-   generation 保持可见；
-5. squash / rebase remap 保持 append-only，并可由 fresh clone 解析；
-6. binding state 和 recovery journal 在中断、损坏与并发 repair 下保持可诊断；
+3. 两个独立 clone 可从共享 checkpoint、后续事件和未解决事件交接并继续；
+4. binding 隔离，open begin 阻止 release/rebind，可恢复 handoff 跨 binding 保持可见；
+5. squash / rebase remap 保持只追加，并可由 fresh clone 解析；
+6. binding state 和 recovery journal 在中断、损坏与并发修复下保持可诊断；
 7. rotation 验证显式 shared checkpoint、本地修改和未知远端操作；
 8. GitHub adapter 的 comment protocol 与最小 Issue/PR facts/availability 可确定性验证；
 9. CLI 入口和 shared-only / local-only 边界可执行。
@@ -477,7 +478,7 @@ Skills 判断哪些事实重要、checkpoint 是否 coherent、Evidence 是否�
 - Task Queue、Scheduler、Worker Registry；
 - 后台同步 daemon 或独立数据库；
 - distributed lock；
-- arbitrary provider plugin system；
+- 任意 provider plugin system；
 - 多 Runtime 完整 adapter；
 - 跨机器同步未提交 working tree；
 - 自动判断 Claim、Acceptance 或最终状态；

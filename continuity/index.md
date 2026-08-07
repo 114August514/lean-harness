@@ -17,7 +17,7 @@ Git
 Project-shared Work Log
 → 跨协作者的重要工作事件
 Local Recovery Log
-→ 当前 clone/worktree 在 checkpoint 后的未稳定现场
+→ 当前 clone/worktree 在 checkpoint 后的未提交现场
 PR
 → Issue 中的一次交付与 Review 子范围
 ```
@@ -25,14 +25,14 @@ PR
 ## 核心不变量
 
 - Work Log 是 Project-shared，并按 Issue / Work Unit 分区。
-- Recovery Log 是 clone-local、per-worktree、per-binding-generation。
+- Recovery Log 是 clone 本地、按 worktree、按 binding 隔离的。
 - Recovery Log 不进入 Git，也不承担跨协作者同步。
 - 普通本地工作只记录 `intent`。
 - 结果不透明、不可安全重复或可能部分成功的操作使用 `begin / end`。
 - `begin` 无 `end` 表示结果未知；重试前必须查询真实目标状态。
-- 相同 event identity 的物理重复只算一个逻辑事件；不同 payload 必须报冲突。
+- 相同 event identity 的物理重复只算一个逻辑事件；不同内容必须报冲突。
 - Git commit 不自动成为 checkpoint。
-- 只有显式发布的 coherent checkpoint event 才形成连续性边界。
+- 只有显式发布的 checkpoint event 才形成连续性边界。
 - 正式决定不能只存在于 Work Log，必须提升到 Issue / Spec / Policy / PR。
 - Continuity 只保存、读取和组合事实；Skills 负责解释、验证和完成判断。
 - 不从日志重放工作，也不建立 Workflow Engine 或 Event Sourcing。
@@ -50,13 +50,13 @@ PR
 - “Context Reconstruction”；
 - “Local Recovery Log”。
 
-### 绑定、暂停、释放或轮转 worktree
+### 绑定、暂停、释放或推进 worktree
 
 阅读 [contract.md](contract.md) 的：
 
-- “Local Recovery Log”及其“Binding generation”；
-- “release / rebind / rotation 不变量”；
-- “Checkpoint、rotation 与历史改写”。
+- "Local Recovery Log"及其"Binding generation"；
+- "release / rebind / rotation 不变量"；
+- "Checkpoint、rotation 与历史改写"。
 
 ### 执行外部写操作
 
