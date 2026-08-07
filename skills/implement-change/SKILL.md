@@ -75,6 +75,8 @@ description: 实现有边界的持久变化：feature、refactor、migration、�
    必要时经 `align-work` 确认。
 
 3. **按等级匹配工作方式。**
+   当本变化涉及新增长期能力时，先按 `policy/working-contract.md` 的"复用优先"
+   确认是否已有成熟实现可直接复用或薄适配；确认存在真实缺口后，只实现缺失部分。
    - C0：直接实现，压缩契约，局部验证即可；
    - C1：实现前确认边界和消费者清单，可按文件或模块委派工作包；
    - C2：先明确结构方向，按 seam 切分工作包，分别委派、最后整合；
@@ -125,8 +127,8 @@ description: 实现有边界的持久变化：feature、refactor、migration、�
 
 # Related policy and references
 
-- `policy/working-contract.md` — 简单性与工程质量、持续设计、结构判断、
-  开发收敛、兼容与迁移、检查时机、临时工具；
+- `policy/working-contract.md` — 简单性与工程质量、复用优先、持续设计、
+  结构判断、开发收敛、兼容与迁移、检查时机、临时工具；
 - `policy/decision-boundaries.md` — 自主与升级边界、范围变化处理；
 - `skills/_shared/work-unit-contract.md` — Implementation extension 字段；
 - `skills/_shared/delegation-contract.md` — 工作包与结果格式；
