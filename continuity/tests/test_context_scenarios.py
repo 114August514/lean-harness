@@ -286,9 +286,8 @@ def test_latest_checkpoint_prefers_descendant_most_candidate(
     second = commit_file(repo, "b.py", "value = 2\n", "second")
     assert is_ancestor(repo, first, second)
 
-    # Publish the descendant checkpoint first and the older checkpoint second:
-    # comment order would pick the older one, but Git ancestry must prefer the
-    # descendant-most reachable checkpoint.
+    # A checkpoint published later must not move the recovery point backwards
+    # when an earlier checkpoint is already reachable from HEAD.
     publisher.create_checkpoint(
         "issue-5", "cycle-1", second, "collaborator:a", event_id="evt-new-second"
     )

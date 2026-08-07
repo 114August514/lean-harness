@@ -369,7 +369,7 @@ Context Reconstruction 只收集和组合：
 - Issue / Spec facts；
 - 当前 PR facts；
 - `git status --porcelain=v1 -z` 的结构化现场；
-- 最近可达、当前 cycle 的共享 checkpoint；
+- 最近可达、当前 cycle 的共享 checkpoint（按 Git ancestry 取 descendant-most）；
 - checkpoint 后的共享事件；
 - checkpoint 之前仍 unresolved 的共享事件；
 - 当前 worktree 当前 binding generation 的 local intent / open begins。
