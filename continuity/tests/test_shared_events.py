@@ -41,6 +41,24 @@ def test_event_id_must_be_a_marker_safe_token():
         prepare_event({**base, "resolves": ["evt-has\nnewline"]})
 
 
+def test_only_event_resolved_may_carry_resolves():
+    base = {
+        "event_id": "evt-finding",
+        "kind": "finding",
+        "work": "issue-5",
+        "cycle_id": "cycle-1",
+        "producer": "agent:test",
+        "created_at": "2026-08-06T00:00:00Z",
+        "summary": "Fact",
+    }
+    with pytest.raises(EventValidationError, match="event-resolved"):
+        prepare_event({**base, "resolves": ["evt-other"]})
+    resolved = prepare_event(
+        {**base, "kind": "event-resolved", "resolves": ["evt-other"]}
+    )
+    assert resolved["resolves"] == ["evt-other"]
+
+
 def test_interpreted_optional_event_fields_are_validated():
     base = {
         "event_id": "evt-invalid-optional",

@@ -156,6 +156,8 @@ def _validate_relations(event: dict[str, Any]) -> None:
         not isinstance(item, str) or not _EVENT_ID.fullmatch(item) for item in resolves
     ):
         raise EventValidationError("resolves must contain event_id values")
+    if resolves and event["kind"] != "event-resolved":
+        raise EventValidationError("only event-resolved may carry resolves")
     references = event.get("references", [])
     if not isinstance(references, list) or any(
         not isinstance(reference, str) or not reference.strip()

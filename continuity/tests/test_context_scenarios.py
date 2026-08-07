@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from continuity.artifacts import git_common_dir, git_dir
+from continuity.artifacts import git_common_dir, git_dir, is_ancestor
 from continuity.worklog.events import prepare_event
 
 from continuity import (
@@ -276,6 +276,49 @@ def test_checkpoint_remap_is_readable_from_a_fresh_clone(
     assert context["shared_events_since_checkpoint"][0]["event_id"] == (
         "evt-squash-remap"
     )
+
+
+def test_latest_checkpoint_prefers_descendant_most_candidate(
+    repo, shared, recovery, reader, publisher
+):
+    recovery.bind("issue-5", "cycle-1")
+    first = commit_file(repo, "a.py", "value = 1\n", "first")
+    second = commit_file(repo, "b.py", "value = 2\n", "second")
+    assert is_ancestor(repo, first, second)
+
+    # Publish the older checkpoint second: comment order would pick it, but
+    # Git ancestry must prefer the descendant-most reachable checkpoint.
+    publisher.create_checkpoint(
+        "issue-5", "cycle-1", first, "collaborator:a", event_id="evt-old-first"
+    )
+    publisher.create_checkpoint(
+        "issue-5", "cycle-1", second, "collaborator:a", event_id="evt-new-second"
+    )
+
+    assert reader.latest_checkpoint("issue-5")["event_id"] == "evt-new-second"
+
+
+def test_no_checkpoint_context_does_not_duplicate_current_cycle_unresolved(
+    repo, recovery, context, publisher
+):
+    recovery.bind("issue-5", "cycle-1")
+    publisher.append_significant(
+        "issue-5",
+        "cycle-1",
+        "finding",
+        "collaborator:a",
+        summary="Current cycle risk",
+        unresolved=True,
+        event_id="evt-current-risk",
+    )
+
+    loaded = context.load()
+
+    assert loaded["latest_checkpoint"] is None
+    assert [
+        event["event_id"] for event in loaded["shared_events_since_checkpoint"]
+    ] == ["evt-current-risk"]
+    assert loaded["earlier_unresolved_shared_events"] == []
 
 
 def test_reader_ignores_cycle_mismatched_checkpoint_remap(

@@ -225,3 +225,37 @@ def test_rotation_next_intent_becomes_the_latest_intent(
     status = recovery.status()
     assert status["latest_intent"]["record_id"] == result["intent"]["record_id"]
     assert context.load()["local_recovery"]["latest_intent"]["action"] == "verification"
+
+
+def test_interrupted_rotation_leaves_recoverable_boundary_residue(
+    repo, recovery, reader, publisher, monkeypatch
+):
+    recovery.bind("issue-5", "cycle-1")
+    checkpoint_commit = commit_file(repo, "work.py", "done = True\n", "coherent")
+    checkpoint = publisher.create_checkpoint(
+        "issue-5", "cycle-1", checkpoint_commit, "agent:test"
+    )
+
+    original_write_state = recovery._write_state
+
+    def fail_state_replace(state):
+        raise RuntimeError("simulated crash after journal append")
+
+    monkeypatch.setattr(recovery, "_write_state", fail_state_replace)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        rotate_recovery(
+            recovery,
+            reader,
+            checkpoint["event_id"],
+            durable_events_acknowledged=True,
+            next_intent="verification",
+        )
+
+    monkeypatch.setattr(recovery, "_write_state", original_write_state)
+    status = recovery.status()
+    assert status["binding"]["base_checkpoint_event_id"] is None
+    assert len(status["incomplete_rotations"]) == 1
+    assert (
+        status["incomplete_rotations"][0]["checkpoint_event_id"]
+        == (checkpoint["event_id"])
+    )

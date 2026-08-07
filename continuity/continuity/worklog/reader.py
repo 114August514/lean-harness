@@ -123,7 +123,12 @@ class WorkEventReader:
             # No anchor yet (e.g. a reopened cycle without a checkpoint): every
             # unresolved shared event still belongs to the recovery context.
             since_checkpoint = _filter(events, cycle_id=cycle_id)
-            earlier_unresolved = _unresolved(events)
+            since_ids = {event["event_id"] for event in since_checkpoint}
+            earlier_unresolved = [
+                event
+                for event in _unresolved(events)
+                if event["event_id"] not in since_ids
+            ]
         else:
             positions = {event["event_id"]: index for index, event in enumerate(events)}
             anchor = positions[checkpoint["event_id"]]
@@ -146,9 +151,8 @@ class WorkEventReader:
         at_commit: str | None,
         cycle_id: str | None,
     ) -> dict[str, Any] | None:
-        for checkpoint in reversed(
-            _filter(events, cycle_id=cycle_id, kind="checkpoint-created")
-        ):
+        candidates: list[dict[str, Any]] = []
+        for checkpoint in _filter(events, cycle_id=cycle_id, kind="checkpoint-created"):
             resolved = _resolve_checkpoint(checkpoint, events)
             if not commit_exists(self.repo, resolved):
                 continue
@@ -156,5 +160,16 @@ class WorkEventReader:
                 self.repo, resolved, at_commit
             ):
                 continue
-            return {**checkpoint, "resolved_commit": resolved}
-        return None
+            candidates.append({**checkpoint, "resolved_commit": resolved})
+        if not candidates:
+            return None
+        # Pick the descendant-most candidate on the artifact path: a later
+        # publication must not move the recovery point backwards when an
+        # earlier checkpoint is already reachable from HEAD.
+        best = candidates[0]
+        for candidate in candidates[1:]:
+            if is_ancestor(
+                self.repo, best["resolved_commit"], candidate["resolved_commit"]
+            ):
+                best = candidate
+        return best

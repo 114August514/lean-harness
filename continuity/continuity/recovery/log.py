@@ -296,6 +296,7 @@ class RecoveryLog:
             "open_begins": open_records,
             "unexplained_open_begins": unexplained_begins(records, open_records),
             "pending_handoffs": self._pending_handoffs(),
+            "incomplete_rotations": _incomplete_rotations(state, records),
             "record_count": len(records),
             "recovery_root": str(self.root),
         }
@@ -463,3 +464,25 @@ class RecoveryLog:
         )
         append_jsonl(path, enriched)
         return enriched
+
+
+def _incomplete_rotations(
+    state: dict[str, Any] | None, records: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Return rotated journal records not yet confirmed by binding state.
+
+    current-binding.json is the authoritative boundary. If a crash interrupted
+    rotation after the journal append but before the state replace, the journal
+    still holds the rotated record while the boundary has not advanced. Surface
+    those records so a replacement can see the residue instead of silently
+    deriving a boundary from an unconfirmed rotation.
+    """
+
+    if state is None:
+        return []
+    confirmed = state.get("base_checkpoint_event_id")
+    return [
+        record
+        for record in records
+        if record["type"] == "rotated" and record["checkpoint_event_id"] != confirmed
+    ]

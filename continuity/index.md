@@ -94,8 +94,9 @@ PR
 
 1. 当前 Issue / Spec 的明确目标和验收；
 2. [`policy/decision-boundaries.md`](../policy/decision-boundaries.md) 的安全、外部契约和禁止边界；
-3. [contract.md](contract.md) 的完整连续性语义；
-4. Skills 中的调用时机和角色规则；
-5. 本索引中的概括性提示。
+3. [`policy/working-contract.md`](../policy/working-contract.md)；
+4. [contract.md](contract.md) 的完整连续性语义；
+5. Skills 中的调用时机和角色规则；
+6. 本索引中的概括性提示。
 
 具体 CLI、环境和开发命令见 [README.md](README.md)。
