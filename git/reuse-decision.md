@@ -6,7 +6,7 @@
 
 ## 决定
 
-**实现一个窄范围的 Local Git MCP layer**
+实现一个窄范围的 Local Git MCP layer。
 
 ## 理由
 
