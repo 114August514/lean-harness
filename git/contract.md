@@ -154,10 +154,11 @@ Work Unit 表达目标、范围、Claims 和验收。branch、worktree、commit 
 必要不变量：
 
 - 仓库定义的稳定 / 集成分支不作为普通开发现场；对其直接修改或合并遵守 Policy 的共享与发布边界。
-- 普通 active modification 使用调用方明确选择的 branch 和 owned worktree。
+- 普通 active modification 使用调用方明确选择的 branch 和当前拥有 writer ownership 的 worktree。
 - 一个可变 worktree 同一时刻只有一个 owner；owner 负责其中的 staged、unstaged、untracked、conflict 和 Recovery 现场。
 - 一个可能被移动的 branch 同一时刻只有一个 writer。不得用绕过 Git worktree branch protection 的方式让多个 worktree 并发移动同一 branch。
 - 并行修改使用不同 worktree，并为会移动的 ref 划分不同 ownership；重叠变化在显式 convergence 操作中整合。
+- worktree ownership 是有时间边界的 writer ownership，不是 worker 与 dedicated worktree 的永久绑定。前一位 owner 停止写入并显式交接当前 HEAD / working state、Recovery（存在时）和 movable ref ownership 后，后一位 owner 可以顺序接管同一个 worktree。
 - 普通 checkout、fresh clone、CI checkout、临时 detached checkout 或只读检查不会自动成为 active work，也不会隐式取得 ownership。
 - detached HEAD 可以用于明确的只读或受控操作；若在其上产生需要保留的 commit，必须先建立保留 ref。checkpoint / handoff 可以记录其语义，但不替代 ref 保存 Git object，也不能依赖 reflog 恢复。
 - worktree 或 branch 与 Work Unit 的关联由 Skills / Continuity 记录；不得从名称猜测目标、owner、完成状态或 Recovery binding。
@@ -575,12 +576,14 @@ MCP 可以报告 mechanical preconditions 和 facts，但不能把启发式建�
 
 1. 创建独立 worktree：从明确 commit 创建新 branch / worktree，注册信息、HEAD、ownership 和 Recovery 各自明确。
 2. 并行修改：两个 owner 使用不同 worktree 和 branch；没有共享 index、同 branch 多 writer 或未声明的重叠 ownership。
-3. 同步稳定分支：先读取目标与 ancestry，再显式选择 merge / rebase；Contract 不替调用方选择策略。
-4. rebase 后 remap：被重放 commit 获得实际新 ID；旧 checkpoint event 保留并只追加无分叉 remap。
-5. squash merge：PR head commits 与 resulting base commit identity 分离；PR merge 不自动令 Work Unit `DONE`。
-6. dirty / ignored handoff 与 cleanup：普通 status clean 但仍有唯一 ignored 文件时 removal 拒绝；未提交现场、Recovery 和需要保留的 commits 均有可靠去向后才允许删除。
-7. safe branch deletion：branch 未被 checkout；需要保留的 identities 已由明确 retained ref 承接，其余已获 owner 授权；ref 仅在仍等于 expected tip 时删除。
-8. destructive cleanup：未知或唯一现场不能通过 `force` 消失；操作进入 Policy 授权边界。
+3. 顺序交接：前一位 owner 停止写入并交接当前工件、Recovery 和 ref ownership 后，后一位 owner 接管同一个 worktree；不要求为每个 worker 新建 dedicated worktree。
+4. 只读检查：read-only worker 可以读取共享 checkout，但不因此获得 worktree 或 ref writer ownership。
+5. 同步稳定分支：先读取目标与 ancestry，再显式选择 merge / rebase；Contract 不替调用方选择策略。
+6. rebase 后 remap：被重放 commit 获得实际新 ID；旧 checkpoint event 保留并只追加无分叉 remap。
+7. squash merge：PR head commits 与 resulting base commit identity 分离；PR merge 不自动令 Work Unit `DONE`。
+8. dirty / ignored handoff 与 cleanup：普通 status clean 但仍有唯一 ignored 文件时 removal 拒绝；未提交现场、Recovery 和需要保留的 commits 均有可靠去向后才允许删除。
+9. safe branch deletion：branch 未被 checkout；需要保留的 identities 已由明确 retained ref 承接，其余已获 owner 授权；ref 仅在仍等于 expected tip 时删除。
+10. destructive cleanup：未知或唯一现场不能通过 `force` 消失；操作进入 Policy 授权边界。
 
 ## 明确不包含
 
