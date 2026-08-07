@@ -152,6 +152,10 @@ Remediation 使用上述特化工作包，不得借修复之名
 - worker 与主 Agent 之间的候选工作事件交接，见
   `skills/_shared/delegation-contract.md`。
 
+Git 工件、branch / worktree ownership、commit identity 和 cleanup 的机械不变量
+以 `git/contract.md` 为准。Skills 只决定何时、为何以及采用什么 Git 操作，不把
+这些判断下放给 Git MCP。
+
 ---
 
 ## 与其他文件的关系
@@ -159,4 +163,5 @@ Remediation 使用上述特化工作包，不得借修复之名
 - 工作单元的目标与验收格式：`skills/_shared/work-unit-contract.md`
 - 主 Agent 与 worker 之间的交接格式：`skills/_shared/delegation-contract.md`
 - 工作连续性（检查点、恢复日志、工作日志）的权威定义：`continuity/contract.md`
+- Git 工件语义和机械不变量：`git/contract.md`
 - 最终状态的具体语义以 `policy/working-contract.md` 的"完成语义"为准。

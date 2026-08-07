@@ -150,6 +150,36 @@ Agent 应自主选择能够覆盖当前实质风险的最小测试集合，
 
 `main` 中存在过的内部实现，不会自动成为永久兼容契约。
 
+### 本地破坏式状态操作
+
+删除代码设计与丢弃尚未保存的本地状态是两类决定。前一类按“开发内破坏式收敛”
+判断；后一类必须先解析实际 loss surface 和 ownership。
+
+本地状态的 owner 是在当前 Work Unit 中被明确赋予责任、能够判断该状态是否仍有价值
+并对其丢失负责的人或 Agent。文件系统写权限、Git 操作权限或 worktree 所在机器不
+自动赋予 ownership。
+
+Agent 可以自主确认丢弃本地状态，仅当以下条件同时成立：
+
+- target 和可能丢失的 paths、index entries、refs、commits、Recovery 状态均已明确；
+- 状态由当前 Agent 在当前 Work Unit 中产生，或其已被明确授予 owner 身份；
+- 已确认状态不再服务当前目标、Evidence、handoff 或后续恢复，或已有可靠保留副本；
+- 不包含其他协作者、用户或未知 owner 的唯一内容；
+- 不修改 remote、共享历史、生产状态或其他外部状态；
+- 操作后会重新读取真实状态，而不是只依据命令成功退出。
+
+存在以下任一情况时，必须由相应人类 owner 或有权 project authority 明确授权：
+
+- ownership 不明，或状态属于其他协作者 / 用户；
+- 唯一内容的价值、可重建性或保留义务不明；
+- branch / commit identity 仍被 checkpoint、Review、Evidence 或未完成 handoff 引用；
+- 操作会修改 remote ref、共享历史或其他外部状态；
+- 丢弃会改变当前目标、验收或正式决定。
+
+`force` 只改变 Git 的机械限制，不提供 ownership 或授权，也不替代 loss-surface
+检查。已知可重建的当前工作缓存与未知来源的 ignored 文件不能仅因命令相同而采用
+同一决策。
+
 ---
 
 ## Agent 应自主推进但提高验证强度
@@ -238,8 +268,8 @@ Agent 应自主选择能够覆盖当前实质风险的最小测试集合，
 以下操作不能仅凭 Agent 自主判断执行：
 
 - `git push --force` 或覆盖共享历史；
-- `git reset --hard` 清除未确认工作；
-- `git clean -fd` 删除未跟踪内容；
+- `git reset --hard`、`restore` / `checkout` 覆盖或其他操作清除未确认工作；
+- `git clean`、强制 branch / worktree deletion 等删除 ownership 或 loss surface 未确认的本地状态；
 - 删除生产或共享环境数据；
 - 执行不可逆数据库操作；
 - 部署到生产环境；
@@ -252,6 +282,8 @@ Agent 应自主选择能够覆盖当前实质风险的最小测试集合，
 存在安全替代方案时，应优先使用可逆方式。
 
 例如共享历史中的错误通常使用 `revert`，而不是直接覆盖历史。
+已按“本地破坏式状态操作”证明由当前 Work Unit 独占、确认无保留价值的本地状态，
+不因使用某个命令名称自动升级为人类决定；不满足该证明时仍属于本节禁止范围。
 
 ---
 

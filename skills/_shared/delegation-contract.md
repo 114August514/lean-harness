@@ -34,15 +34,26 @@ Expected output
 | Allowed actions | worker 可以执行的动作范围，特别是允许修改什么 |
 | Expected output | 期望的 Result Envelope 形态和重点 |
 
-修改工件时按需增加：
+会修改 repository checkout 内工件的 Work Package 必须增加：
 
 ```text
+Repository
+Starting HEAD / unborn state
+Owned worktree
+Movable branch / ref ownership（或明确 detached state）
 Owned files or modules
+Relevant local-only artifacts（实际存在时）
 Forbidden scope expansion
 Required verification
 ```
 
+- **Repository**：本次修改所属的明确 local repository / project reference。
+- **Starting HEAD / unborn state**：worker 接手时的完整工件起点，不用 branch 名猜测。
+- **Owned worktree**：worker 独占的可变 worktree；未接入 Continuity 也仍然必需。
+- **Movable branch / ref ownership**：本次允许移动的 branch / ref；detached 时明确写出，
+  不让两个 writer 并发移动同一 ref。
 - **Owned files or modules**：该 worker 独占修改权的文件或模块。
+- **Relevant local-only artifacts**：继续工作需要的非 Git 工件、实际保存位置与恢复方式。
 - **Forbidden scope expansion**：明确禁止顺手处理的相邻问题。
 - **Required verification**：交付前必须完成的最低验证。
 
@@ -51,8 +62,8 @@ Required verification
 ```text
 Work reference            关联的 Issue / Work Unit
 Cycle id                  当前处理周期
-Starting commit / checkpoint
-Owned worktree            worker 独占的 worktree（及其恢复日志）
+Starting checkpoint       已显式发布的 Continuity 恢复边界（存在时）
+Recovery binding          owned worktree 的当前 Recovery binding / log
 Relevant unresolved events 恢复时需要知道的未解决旧事件
 ```
 
@@ -90,17 +101,25 @@ Changed files
 Commands run
 Observed results
 Unverified areas
+Resulting commits
+Local-only artifacts
 ```
 
 - **Changed files**：实际修改的文件清单。
 - **Commands run**：执行过的关键命令。
 - **Observed results**：命令和验证的实际输出要点。
 - **Unverified areas**：修改了但没有验证到的区域，必须如实列出。
+- **Resulting commits**：实际产生的完整 commit identities（没有则省略）。
+- **Local-only artifacts**：需要继续使用但未进入 Git 的工件、保存位置与恢复方式
+  （没有则省略）。
+
+记录 local-only artifact 的路径不等于完成保存。worker 必须说明工件仍由哪个 owned
+worktree / storage 保留，以及下一位 owner 如何验证和恢复。敏感内容不得复制进
+Result Envelope。
 
 当工作单元已接入工作连续性（`continuity/contract.md`）时，worker 返回还应包含：
 
 ```text
-Resulting commits           产生的 commit
 Candidate work events       候选工作事件（是否进入长期工作日志由主 Agent 决定）
 Open or unknown operations  未结束或结果未知的操作（begin 无 end）
 ```
@@ -112,8 +131,13 @@ worker 不直接写 Project 工作日志的长期分区；候选事件交回主 
 
 ## 所有权与边界
 
+- 每个修改 Git 工件的 worker 必须独占一个可变 worktree；即使文件范围不重叠，多个
+  writer 也不得共享同一 index、HEAD 或 working tree；
+- 同一可移动 branch / ref 同一时刻只有一个 writer；
 - 一个文件或模块在同一时刻只有一个 worker 拥有修改权；
 - 不得让多个 worker 在没有明确所有权划分的情况下并行修改相同文件或模块；
+- read-only worker 可以检查共享 checkout，但这不建立 active work、worktree ownership
+  或 ref writer 权限；
 - worker 不得超出 Owned files or modules 修改其他内容；发现边界外的问题时，
   记录进 Unresolved 交回主 Agent，而不是顺手修改；
 - worker 返回 Evidence 和 Unverified areas 是义务，不是可选项；没有验证的区域
@@ -154,3 +178,4 @@ worker 不直接写 Project 工作日志的长期分区；候选事件交回主 
 - 委派在整个闭环中的位置：`skills/_shared/work-lifecycle.md`
 - 连续性相关字段的语义：`continuity/contract.md` 的
   “Skills、完成检查与 Git 最小不变量”
+- owned worktree、branch writer 与安全清理语义：`git/contract.md`

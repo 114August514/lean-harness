@@ -13,7 +13,7 @@
 Issue / Spec
 → 目标、范围、验收和正式决定
 Git
-→ 当前工件与提交历史
+→ 当前工件与提交历史；完整语义见 [`git/contract.md`](../git/contract.md)
 Project-shared Work Log
 → 跨协作者的重要工作事件
 Local Recovery Log
@@ -27,6 +27,7 @@ PR
 - Work Log 是 Project-shared，并按 Issue / Work Unit 分区。
 - Recovery Log 是 clone 本地、按 worktree、按 binding 隔离的。
 - Recovery Log 不进入 Git，也不承担跨协作者同步。
+- Recovery Log 不保存 working-tree 内容；有工作价值的 ignored / local-only artifact 必须实际保留并显式交接。
 - 普通本地工作只记录 `intent`。
 - 结果不透明、不可安全重复或可能部分成功的操作使用 `begin / end`。
 - `begin` 无 `end` 表示结果未知；重试前必须查询真实目标状态。
@@ -52,11 +53,12 @@ PR
 
 ### 绑定、暂停、释放或推进 worktree
 
-阅读 [contract.md](contract.md) 的：
+阅读：
 
-- "Local Recovery Log"及其"Binding generation"；
-- "release / rebind / rotation 不变量"；
-- "Checkpoint、rotation 与历史改写"。
+- [contract.md](contract.md) 的 "Local Recovery Log"及其"Binding generation"；
+- [contract.md](contract.md) 的 "release / rebind / rotation 不变量"；
+- [contract.md](contract.md) 的 "Checkpoint、rotation 与历史改写"；
+- [`git/contract.md`](../git/contract.md) 的 worktree ownership 与安全清理规则。
 
 ### 执行外部写操作
 
@@ -90,13 +92,22 @@ PR
 
 ## Authority
 
-发生冲突时，按以下顺序定位权威来源：
+全局约束按以下顺序处理：
 
 1. 当前 Issue / Spec 的明确目标和验收；
-2. [`policy/decision-boundaries.md`](../policy/decision-boundaries.md) 的安全、外部契约和禁止边界；
-3. [`policy/working-contract.md`](../policy/working-contract.md)；
-4. [contract.md](contract.md) 的完整连续性语义；
-5. Skills 中的调用时机和角色规则；
-6. 本索引中的概括性提示。
+2. [`policy/decision-boundaries.md`](../policy/decision-boundaries.md) 的安全、权限、外部操作和 destructive boundary；
+3. [`policy/working-contract.md`](../policy/working-contract.md) 的工程质量与完成语义。
+
+其余语义不采用一条互相覆盖的全局顺序，而按领域定位权威来源：
+
+| 语义域 | 权威来源 |
+| --- | --- |
+| Git object、ref、index、working tree、worktree、identity、ancestry、reachability 与机械安全 | [`git/contract.md`](../git/contract.md) |
+| Recovery、Shared Work Log、checkpoint 声明、remap、rotation 与 resume | [contract.md](contract.md) |
+| 操作时机、工程意义、验证、Review 与完成判断 | Skills |
+
+交界事实由两层各自完成自己的判断，而不是互相覆盖。例如 Git Contract 判断 commit
+是否存在和可达，Continuity Contract 判断它是否被显式声明为 checkpoint。本索引只
+提供导航，不提升自身权威。
 
 具体 CLI、环境和开发命令见 [README.md](README.md)。

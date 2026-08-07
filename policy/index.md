@@ -46,6 +46,12 @@
 - `working-contract.md` 的“临时工具”
 - `decision-boundaries.md` 的“临时工作手段”
 
+准备改写 Git 历史、强制删除 branch / worktree 或清除本地修改时，阅读：
+
+- `decision-boundaries.md` 的“本地破坏式状态操作”
+- `decision-boundaries.md` 的“未明确授权时禁止执行”
+- [`../git/contract.md`](../git/contract.md) 的“安全清理”和“Destructive operations”
+
 不确定是否需要询问人类时，阅读：
 
 - `decision-boundaries.md` 的“默认决策规则”
