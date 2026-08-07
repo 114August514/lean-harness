@@ -1,0 +1,23 @@
+name: continuity
+
+on:
+  push:
+    branches: [main]
+    paths: [continuity/**, pyproject.toml, uv.lock, .github/workflows/continuity.yml]
+  pull_request:
+    paths: [continuity/**, pyproject.toml, uv.lock, .github/workflows/continuity.yml]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --group dev
+      - run: uv run pytest -q
+      - run: uv run ruff check continuity && uv run ruff format --check continuity
+      - run: uv run python -m compileall -q continuity/continuity
+      - run: |
+          tmp=$(mktemp -d)
+          git -C "$tmp" init -q -b main
+          cd continuity && uv run python -m continuity --repo "$tmp" recovery status | grep -q '"binding": null'

@@ -46,6 +46,16 @@ Required verification
 - **Forbidden scope expansion**：明确禁止顺手处理的相邻问题。
 - **Required verification**：交付前必须完成的最低验证。
 
+当工作单元已接入工作连续性（`continuity/contract.md`）时，工作包按需携带：
+
+```text
+Work reference            关联的 Issue / Work Unit
+Cycle id                  当前处理周期
+Starting commit / checkpoint
+Owned worktree            worker 独占的 worktree（及其恢复日志）
+Relevant unresolved events 恢复时需要知道的未解决旧事件
+```
+
 工作包应自洽：worker 不应需要阅读主 Agent 的完整对话才能理解任务。
 同时只放入完成该工作包所需的信息，不要把主上下文整个复制过去。
 
@@ -86,6 +96,17 @@ Unverified areas
 - **Commands run**：执行过的关键命令。
 - **Observed results**：命令和验证的实际输出要点。
 - **Unverified areas**：修改了但没有验证到的区域，必须如实列出。
+
+当工作单元已接入工作连续性（`continuity/contract.md`）时，worker 返回还应包含：
+
+```text
+Resulting commits           产生的 commit
+Candidate work events       候选工作事件（是否进入长期工作日志由主 Agent 决定）
+Open or unknown operations  未结束或结果未知的操作（begin 无 end）
+```
+
+worker 不直接写 Project 工作日志的长期分区；候选事件交回主 Agent 检查后追加
+（写入所有权见 `continuity/contract.md` 的“写入所有权与正式决定”）。
 
 ---
 
@@ -131,3 +152,5 @@ Unverified areas
 
 - 工作单元的目标与验收格式：`skills/_shared/work-unit-contract.md`
 - 委派在整个闭环中的位置：`skills/_shared/work-lifecycle.md`
+- 连续性相关字段的语义：`continuity/contract.md` 的
+  “Skills、完成检查与 Git 最小不变量”
