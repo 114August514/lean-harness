@@ -386,6 +386,11 @@ original_path when renamed/copied
 conflict
 ```
 
+默认 Git status 不展示 ignored paths，Recovery Log 也不保存 working-tree 内容。
+需要继续使用的 ignored 或其他 local-only artifact 必须由 owner 在 intent / handoff 中
+显式引用，并说明其实际保存位置与恢复方式；仅记录路径不能让内容跨 worktree 或 clone
+恢复。敏感内容仍按 Policy 处理，不得为了连续性写入 Git 或共享日志。
+
 显式 `resume --work X --cycle Y` 与活跃/暂停的本地 binding 不一致时必须拒绝。
 CLI 调用方可显式请求 `shared_only`；Python API 通过不提供 `RecoveryLog` 表达同一
 模式。此时只加载共享与 Git 上下文，不创建 Recovery、不读取本地 state、不创建
@@ -435,6 +440,7 @@ Skills 判断哪些事实重要、checkpoint 是否完整、Evidence 是否支�
 
 - 没有未解释的 `begin`；
 - dirty working tree 已 commit、明确处理或形成可恢复 handoff；
+- 具有工作价值的 ignored / local-only artifact 已实际保留并显式交接，或已确认可重建；
 - 完整 checkpoint 已作为共享事件发布，或未稳定现场仍被本地 recovery 保护；
 - Evidence 对应当前工件；
 - 长期事件已经发布；
@@ -446,11 +452,14 @@ Skills 判断哪些事实重要、checkpoint 是否完整、Evidence 是否支�
 - checkpoint 必须显式发布且完整；
 - commit 可达性是工件相关性的必要事实；
 - staged / unstaged / conflict / rename 状态必须保留；
+- ignored / local-only artifact 不会自动进入 Git status 或 Recovery，具有工作价值时必须显式处理；
 - rebase / squash 使用只追加 remap；
 - Recovery Log 不进入 Git；
 - Shared Work Log 不属于任何 branch。
 
-完整 Git 工作契约属于独立 Issue，不在本能力中展开。
+完整 Git 工件语义、ownership、history rewrite 和安全清理规则以
+[`git/contract.md`](../git/contract.md) 为准；本节只保留 Continuity 直接依赖的
+最小连接点，不重复展开。
 
 ## 验收场景
 

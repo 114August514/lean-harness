@@ -131,6 +131,7 @@ verify
 
    - 没有未解释的 `begin`（无 `end` 的外部操作已查询真实状态并处理）；
    - dirty working tree 已被理解：已 commit、已明确交接或已有下一步 intent；
+   - 具有工作价值的 ignored / local-only artifact 已实际保留并显式交接，或已确认可重建；
    - 重要工件已经形成检查点，或未提交现场已明确交接；
    - 当前 Evidence 对应当前工件；
    - 具有长期价值的事件已经写入工作日志；
@@ -208,4 +209,5 @@ HANDOFF  + 最小 HANDOFF 内容（见上）
 - `skills/_shared/work-unit-contract.md` — Acceptance mode；
 - `skills/_shared/delegation-contract.md` — remediation 委派的格式基础；
 - `continuity/contract.md` — 完成阶段的连续性检查
-  （“Skills、完成检查与 Git 最小不变量”）。
+  （“Skills、完成检查与 Git 最小不变量”）；
+- `git/contract.md` — dirty worktree、commit reachability 与安全清理的机械不变量。
