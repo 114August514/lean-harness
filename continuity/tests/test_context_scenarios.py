@@ -286,13 +286,14 @@ def test_latest_checkpoint_prefers_descendant_most_candidate(
     second = commit_file(repo, "b.py", "value = 2\n", "second")
     assert is_ancestor(repo, first, second)
 
-    # Publish the older checkpoint second: comment order would pick it, but
-    # Git ancestry must prefer the descendant-most reachable checkpoint.
-    publisher.create_checkpoint(
-        "issue-5", "cycle-1", first, "collaborator:a", event_id="evt-old-first"
-    )
+    # Publish the descendant checkpoint first and the older checkpoint second:
+    # comment order would pick the older one, but Git ancestry must prefer the
+    # descendant-most reachable checkpoint.
     publisher.create_checkpoint(
         "issue-5", "cycle-1", second, "collaborator:a", event_id="evt-new-second"
+    )
+    publisher.create_checkpoint(
+        "issue-5", "cycle-1", first, "collaborator:a", event_id="evt-old-first"
     )
 
     assert reader.latest_checkpoint("issue-5")["event_id"] == "evt-new-second"
