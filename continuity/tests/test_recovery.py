@@ -200,3 +200,28 @@ def test_rotation_enforces_shared_checkpoint_local_and_remote_facts(
     )
     assert result["binding"]["base_checkpoint_event_id"] == checkpoint["event_id"]
     assert result["rotation"]["checkpoint_commit"] == checkpoint_commit
+
+
+def test_rotation_next_intent_becomes_the_latest_intent(
+    repo, recovery, reader, publisher, context
+):
+    recovery.bind("issue-5", "cycle-1")
+    recovery.intent("Implement the shared publisher")
+    checkpoint_commit = commit_file(repo, "work.py", "done = True\n", "coherent")
+    checkpoint = publisher.create_checkpoint(
+        "issue-5", "cycle-1", checkpoint_commit, "agent:test"
+    )
+
+    result = rotate_recovery(
+        recovery,
+        reader,
+        checkpoint["event_id"],
+        durable_events_acknowledged=True,
+        next_intent="verification",
+    )
+
+    assert result["intent"]["action"] == "verification"
+    assert result["intent"]["base_checkpoint_event_id"] == checkpoint["event_id"]
+    status = recovery.status()
+    assert status["latest_intent"]["record_id"] == result["intent"]["record_id"]
+    assert context.load()["local_recovery"]["latest_intent"]["action"] == "verification"

@@ -14,6 +14,33 @@ from continuity import (
 from .conftest import git
 
 
+def test_event_id_must_be_a_marker_safe_token():
+    base = {
+        "event_id": "evt-valid-1",
+        "kind": "finding",
+        "work": "issue-5",
+        "cycle_id": "cycle-1",
+        "producer": "agent:test",
+        "created_at": "2026-08-06T00:00:00Z",
+        "summary": "Fact",
+    }
+    unsafe = (
+        "evt-has space",
+        "evt-has\nnewline",
+        "evt-breaks-->marker",
+        "evt-",
+        "evt-下不安全",
+    )
+    for event_id in unsafe:
+        with pytest.raises(EventValidationError, match="marker-safe"):
+            prepare_event({**base, "event_id": event_id})
+    for field in ("checkpoint_event_id",):
+        with pytest.raises(EventValidationError):
+            prepare_event({**base, field: "evt-has space"})
+    with pytest.raises(EventValidationError):
+        prepare_event({**base, "resolves": ["evt-has\nnewline"]})
+
+
 def test_interpreted_optional_event_fields_are_validated():
     base = {
         "event_id": "evt-invalid-optional",

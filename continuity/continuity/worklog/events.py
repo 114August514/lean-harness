@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from ..errors import EventIdentityConflict, EventValidationError
+
+# event_id flows through adapter markers (HTML comments, fenced blocks), so it
+# must be a token every adapter can embed and match verbatim.
+_EVENT_ID = re.compile(r"^evt-[0-9A-Za-z-]+$")
 
 STRUCTURAL_KINDS = {
     "checkpoint-created",
@@ -132,8 +137,11 @@ def _validate_event(event: dict[str, Any], expected_work: str | None = None) -> 
         raise EventValidationError(
             f"event work {event['work']} does not match partition {expected_work}"
         )
-    if not event["event_id"].startswith("evt-"):
-        raise EventValidationError("event_id must be a stable evt-* identity")
+    if not _EVENT_ID.fullmatch(event["event_id"]):
+        raise EventValidationError(
+            "event_id must be a marker-safe evt-* token: evt- followed by "
+            "letters, digits or dashes"
+        )
 
     _validate_relations(event)
     _validate_structural_fields(event)
@@ -145,7 +153,7 @@ def _validate_relations(event: dict[str, Any]) -> None:
 
     resolves = event.get("resolves", [])
     if not isinstance(resolves, list) or any(
-        not isinstance(item, str) or not item.startswith("evt-") for item in resolves
+        not isinstance(item, str) or not _EVENT_ID.fullmatch(item) for item in resolves
     ):
         raise EventValidationError("resolves must contain event_id values")
     references = event.get("references", [])
@@ -183,7 +191,7 @@ def _validate_structural_fields(event: dict[str, Any]) -> None:
     checkpoint_event_id = event.get("checkpoint_event_id")
     if checkpoint_event_id is not None and (
         not isinstance(checkpoint_event_id, str)
-        or not checkpoint_event_id.startswith("evt-")
+        or not _EVENT_ID.fullmatch(checkpoint_event_id)
     ):
         raise EventValidationError("checkpoint_event_id must be an event identity")
 

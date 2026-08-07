@@ -348,6 +348,17 @@ class RecoveryLog:
                 "next_intent": next_intent,
             },
         )
+        intent = self._append_for(
+            state,
+            {
+                "type": "intent",
+                "action_id": _new_id("act"),
+                "action": next_intent,
+                "scope": [],
+                "base_checkpoint_event_id": checkpoint_event_id,
+                "head_at_record": head_at_rotation,
+            },
+        )
         updated = {
             **state,
             "base_checkpoint_event_id": checkpoint_event_id,
@@ -356,7 +367,7 @@ class RecoveryLog:
             "next_intent": next_intent,
         }
         self._write_state(updated)
-        return {"binding": updated, "rotation": record}
+        return {"binding": updated, "rotation": record, "intent": intent}
 
     def _state(self) -> dict[str, Any] | None:
         state = read_json(self.state_path)

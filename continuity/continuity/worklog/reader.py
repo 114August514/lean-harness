@@ -41,11 +41,14 @@ def _resolve_checkpoint(
     current = checkpoint["commit"]
     seen = {current}
     while True:
+        # Shared comments are cross-collaborator input: the publisher-side cycle
+        # check is not enough, the reader must enforce the same invariant.
         replacements = {
             event["new_commit"]
             for event in events
             if event.get("kind") == "checkpoint-remapped"
             and event.get("checkpoint_event_id") == checkpoint["event_id"]
+            and event.get("cycle_id") == checkpoint["cycle_id"]
             and event.get("old_commit") == current
         }
         if not replacements:
@@ -117,8 +120,10 @@ class WorkEventReader:
             events, at_commit=at_commit, cycle_id=cycle_id
         )
         if checkpoint is None:
+            # No anchor yet (e.g. a reopened cycle without a checkpoint): every
+            # unresolved shared event still belongs to the recovery context.
             since_checkpoint = _filter(events, cycle_id=cycle_id)
-            earlier_unresolved = []
+            earlier_unresolved = _unresolved(events)
         else:
             positions = {event["event_id"]: index for index, event in enumerate(events)}
             anchor = positions[checkpoint["event_id"]]

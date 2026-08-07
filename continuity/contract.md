@@ -332,6 +332,10 @@ rotation 接受 `checkpoint_event_id`，并验证：
 - 调用方已明确 acknowledgement：其判断需要长期保留的事件已经提升；
 - 调用方给出的下一项 intent 非空。
 
+rotation 推进边界的同时原子地写入一条 `intent` record，使 `latest_intent` 立即
+反映新阶段行动；binding state 中的 `next_intent` 字段只是该 record 的镜像，不是
+独立的意图来源。
+
 最后两项是 continuity 保存的调用方 observation，不是组件对工程意义的独立证明。
 哪些事件值得提升、commit 是否 coherent、下一项 intent 是否合适仍由 Skills / owner
 判断。CLI 使用 `--ack-durable-events-promoted` 和 `--next-intent` 明确这一区别。

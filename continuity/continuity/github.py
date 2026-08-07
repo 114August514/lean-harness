@@ -20,7 +20,6 @@ from .worklog.events import (
 MARKER_VERSION = "v1"
 MARKER_PREFIX = "lean-harness-work-event"
 _MARKER = re.compile(rf"<!-- {MARKER_PREFIX}:{MARKER_VERSION} event_id=([^ ]+) -->")
-_PAYLOAD = re.compile(r"```json\s*(\{.*\})\s*```", re.DOTALL)
 _WORK = re.compile(r"^issue-([1-9][0-9]*)$")
 
 
@@ -34,16 +33,35 @@ def issue_number(work: str) -> int:
 
 
 def render_comment(event: dict[str, Any]) -> str:
-    marker = f"<!-- {MARKER_PREFIX}:{MARKER_VERSION} event_id={event['event_id']} -->"
-    summary = event.get("summary") or "Structured observation attached."
     durable_event = durable_fields(event)
     payload = json.dumps(durable_event, ensure_ascii=False, indent=2, sort_keys=True)
+    summary = event.get("summary") or "Structured observation attached."
     return (
-        f"{marker}\n"
+        f"<!-- {MARKER_PREFIX}:{MARKER_VERSION} "
+        f"event_id={event['event_id']} -->\n"
+        f"```json\n{payload}\n```\n"
         f"### Lean Harness work event · `{event['kind']}`\n\n"
-        f"{summary}\n\n"
-        f"```json\n{payload}\n```"
+        f"{summary}\n"
     )
+
+
+def _payload_span(body: str, marker: re.Match[str]) -> tuple[int, int] | None:
+    """Locate the payload: the json fence immediately after the marker line.
+
+    The marker is the single machine anchor. Only one newline may separate it
+    from the payload fence, so the summary (which follows the payload) may
+    contain any fenced examples without affecting where the payload is read.
+    """
+
+    if not body.startswith("\n```json\n", marker.end()):
+        return None
+    content_start = marker.end() + len("\n```json\n")
+    close_fence = body.find("\n```", content_start)
+    if close_fence < 0:
+        return None
+    # The payload content is line-delimited JSON written by render_comment; a
+    # bare ``` line never appears inside it, so the first closing fence ends it.
+    return content_start, close_fence
 
 
 def parse_comment(
@@ -55,13 +73,13 @@ def parse_comment(
     marker = _MARKER.search(body)
     if marker is None:
         return None
-    payload = _PAYLOAD.search(body)
-    if payload is None:
+    span = _payload_span(body, marker)
+    if span is None:
         raise SharedStoreError(
             f"malformed tagged work-event comment {comment.get('id', '<unknown>')}"
         )
     try:
-        event = json.loads(payload.group(1))
+        event = json.loads(body[span[0] : span[1]])
     except json.JSONDecodeError as error:
         raise SharedStoreError(
             f"malformed work-event JSON in comment {comment.get('id', '<unknown>')}: "
@@ -130,10 +148,10 @@ def _check_summary(checks: Any) -> dict[str, Any]:
         if not isinstance(check, dict):
             continue
         name = check.get("name") or check.get("context") or "unnamed-check"
-        if (
-            check.get("status") not in {None, "COMPLETED"}
-            or check.get("state") == "PENDING"
-        ):
+        if check.get("status") not in {None, "COMPLETED"} or check.get("state") in {
+            "PENDING",
+            "EXPECTED",
+        }:
             pending_names.append(name)
         elif check.get("conclusion") in successful or check.get("state") == "SUCCESS":
             passed += 1

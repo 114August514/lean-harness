@@ -59,6 +59,45 @@ def test_github_comment_parser_round_trips_nested_payload():
     assert parsed["observation"] == nested["observation"]
 
 
+def test_github_comment_parser_tolerates_json_fence_in_summary():
+    event = _event(
+        summary='Findings:\n\n```json\n{"status": "unknown"}\n```',
+        observation={"conclusion": "payload survives a fenced summary"},
+    )
+
+    parsed = parse_comment(_comment(event))
+
+    assert parsed is not None
+    assert parsed["observation"] == event["observation"]
+    assert parsed["summary"] == event["summary"]
+
+
+def test_github_comment_parser_reports_payload_not_immediately_after_marker():
+    comment = _comment(_event())
+    marker_end = comment["body"].index("-->") + len("-->")
+    comment["body"] = (
+        comment["body"][:marker_end]
+        + "\n\ninterleaved prose"
+        + comment["body"][marker_end:]
+    )
+
+    with pytest.raises(SharedStoreError, match="malformed tagged work-event"):
+        parse_comment(comment)
+
+
+def test_github_comment_parser_tolerates_stray_fence_line_in_summary():
+    event = _event(
+        summary=("Fence example follows.\n\n```\nplain code, not json\n```"),
+        observation={"conclusion": "payload survives a stray closing fence"},
+    )
+
+    parsed = parse_comment(_comment(event))
+
+    assert parsed is not None
+    assert parsed["observation"] == event["observation"]
+    assert parsed["summary"] == event["summary"]
+
+
 def test_github_store_lists_and_appends_structured_comments(repo, monkeypatch):
     existing = _event()
     appended = _event(event_id="evt-appended", summary="Appended fact")
@@ -155,6 +194,11 @@ def test_pull_request_facts_include_minimal_check_summary(repo, monkeypatch):
                 "context": "policy",
                 "state": "FAILURE",
             },
+            {
+                "__typename": "StatusContext",
+                "context": "merge-gate",
+                "state": "EXPECTED",
+            },
         ],
     }
 
@@ -171,11 +215,11 @@ def test_pull_request_facts_include_minimal_check_summary(repo, monkeypatch):
     assert facts["availability"] == "present"
     assert facts["mergeStateStatus"] == "CLEAN"
     assert facts["checks"] == {
-        "total": 3,
+        "total": 4,
         "passed": 1,
-        "pending": 1,
+        "pending": 2,
         "failed": 1,
-        "pending_names": ["lint"],
+        "pending_names": ["lint", "merge-gate"],
         "failing_names": ["policy"],
     }
 

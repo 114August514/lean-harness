@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from continuity.artifacts import git_common_dir, git_dir
+from continuity.worklog.events import prepare_event
 
 from continuity import (
     BindingMismatchError,
@@ -178,6 +179,44 @@ def test_fresh_clone_recovers_shared_direction_evidence_and_handoff(tmp_path):
     assert len(reader_b.events("issue-5", kind="checkpoint-created")) == 2
 
 
+def test_reopened_cycle_without_checkpoint_keeps_earlier_unresolved_events(
+    repo, recovery, context, reader, publisher, project_facts
+):
+    recovery.bind("issue-5", "cycle-1")
+    old_unresolved = publisher.append_significant(
+        "issue-5",
+        "cycle-1",
+        "finding",
+        "collaborator:a",
+        summary="Migration risk still needs an owner",
+        unresolved=True,
+        event_id="evt-old-risk",
+    )
+    recovery.pause()
+    # The reopen event is published by the new cycle's binding.
+    recovery.bind("issue-5", "cycle-2")
+    publisher.reopen_work(
+        "issue-5",
+        "cycle-2",
+        "collaborator:a",
+        "Reopen to finish the migration",
+        event_id="evt-reopen",
+    )
+
+    resumed = context.load()
+    assert resumed["cycle_id"] == "cycle-2"
+    assert resumed["latest_checkpoint"] is None
+    assert [
+        event["event_id"] for event in resumed["shared_events_since_checkpoint"]
+    ] == ["evt-reopen"]
+    assert resumed["earlier_unresolved_shared_events"] == [old_unresolved]
+
+    shared_only = ContextReconstructor(reader, project_facts=project_facts).load(
+        "issue-5", "cycle-2"
+    )
+    assert shared_only["earlier_unresolved_shared_events"] == [old_unresolved]
+
+
 def test_checkpoint_remap_is_readable_from_a_fresh_clone(
     repo, tmp_path, shared, recovery, reader, publisher
 ):
@@ -237,3 +276,50 @@ def test_checkpoint_remap_is_readable_from_a_fresh_clone(
     assert context["shared_events_since_checkpoint"][0]["event_id"] == (
         "evt-squash-remap"
     )
+
+
+def test_reader_ignores_cycle_mismatched_checkpoint_remap(
+    repo, tmp_path, shared, recovery, publisher
+):
+    recovery.bind("issue-5", "cycle-1")
+    git(repo, "checkout", "-qb", "feature")
+    old_commit = commit_file(repo, "feature.py", "value = 1\n", "feature commit")
+    checkpoint = publisher.create_checkpoint(
+        "issue-5",
+        "cycle-1",
+        old_commit,
+        "collaborator:a",
+        event_id="evt-pre-squash",
+    )
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "--squash", "feature")
+    git(repo, "commit", "-qm", "squashed feature")
+    new_commit = git(repo, "rev-parse", "HEAD")
+    foreign = prepare_event(
+        {
+            "event_id": "evt-foreign-remap",
+            "kind": "checkpoint-remapped",
+            "work": "issue-5",
+            "cycle_id": "cycle-2",
+            "producer": "agent:other",
+            "created_at": "2026-08-07T00:00:00Z",
+            "summary": "Remap recorded under a different cycle",
+            "checkpoint_event_id": checkpoint["event_id"],
+            "old_commit": old_commit,
+            "new_commit": new_commit,
+            "reason": "cross-cycle input must not resolve this checkpoint",
+        }
+    )
+    shared.append_event("issue-5", foreign)
+
+    remote = tmp_path / "history.git"
+    clone_b = tmp_path / "fresh-clone"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], check=True)
+    subprocess.run(["git", "clone", "-q", str(remote), str(clone_b)], check=True)
+    configure_user(clone_b)
+    reader_b = WorkEventReader(clone_b, shared)
+    context = ContextReconstructor(reader_b, recovery=RecoveryLog(clone_b)).load(
+        "issue-5", "cycle-1"
+    )
+
+    assert context["latest_checkpoint"] is None
