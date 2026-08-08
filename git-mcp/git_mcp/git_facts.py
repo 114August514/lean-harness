@@ -361,14 +361,16 @@ def read_refs(git: GitRunner) -> list[RefInfo]:
 
 def read_commit(git: GitRunner, rev: str) -> CommitInfo | None:
     """Read commit facts. Returns None if the object doesn't exist or isn't a commit."""
-    result = git.run(["cat-file", "-t", rev], check=False)
+    result = git.run(["cat-file", "-t", "--end-of-options", rev], check=False)
     if not result.ok:
         return None
     obj_type = result.text.strip()
     if obj_type != "commit":
         return None
 
-    parents_result = git.run(["cat-file", "commit", rev], check=False)
+    parents_result = git.run(
+        ["cat-file", "commit", "--end-of-options", rev], check=False
+    )
     if not parents_result.ok:
         return None
 
@@ -393,7 +395,8 @@ def read_commit(git: GitRunner, rev: str) -> CommitInfo | None:
 def is_ancestor(git: GitRunner, ancestor: str, descendant: str) -> bool:
     """Check if ancestor is an ancestor of descendant."""
     result = git.run(
-        ["merge-base", "--is-ancestor", ancestor, descendant], check=False
+        ["merge-base", "--is-ancestor", "--end-of-options", ancestor, descendant],
+        check=False,
     )
     return result.ok
 
@@ -411,7 +414,7 @@ def read_diff(
 
     Returns a dict with the diff text and truncation indicator.
     """
-    args = ["diff", "--no-color"]
+    args = ["diff", "--no-color", "--end-of-options"]
     if cached:
         args.append("--cached")
     if base and target:

@@ -304,14 +304,14 @@ def integrate(
     if operation == "merge":
         if not source:
             return {"error": "merge requires source"}
-        result = git.run(["merge", "--", source], check=False)
+        result = git.run(["merge", "--end-of-options", source], check=False)
     elif operation == "rebase":
         if not source:
             return {"error": "rebase requires source (upstream)"}
         args = ["rebase"]
         if onto:
             args.extend(["--onto", onto])
-        args.extend(["--", source])
+        args.extend(["--end-of-options", source])
         result = git.run(args, check=False)
     else:
         return {"error": f"unknown operation: {operation}. Use merge or rebase."}
