@@ -6,7 +6,6 @@ Git Contract semantics. No fake Git substitutes.
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 
@@ -196,7 +195,7 @@ class TestServer:
 
     async def _call(self, mcp, tool: str, args: dict | None = None) -> dict:
         result = await mcp.call_tool(tool, args or {})
-        return json.loads(result.content[0].text)
+        return result.structured_content
 
     @pytest.mark.asyncio()
     async def test_read_context(self, repo: Path):

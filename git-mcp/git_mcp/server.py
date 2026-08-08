@@ -1,13 +1,12 @@
 """MCP tool surface for Local Git capability.
 
 Thin wiring layer: binds MCP tool schemas to git_facts / git_mutations.
-No Git semantics here — only MCP registration and JSON serialization.
+No Git semantics here — only MCP registration and SDK-native structured output.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -56,12 +55,7 @@ def create_server(repo_path: str) -> MCPServer:
     return mcp
 
 
-def _json(data: Any) -> str:
-    """Serialize to JSON string for MCP text content."""
-    return json.dumps(data, ensure_ascii=False, indent=2)
-
-
-def _head_to_dict(head) -> dict:
+def _head_to_dict(head) -> dict[str, Any]:
     return {
         "state": head.state.value,
         "branch": head.branch,
@@ -70,7 +64,7 @@ def _head_to_dict(head) -> dict:
     }
 
 
-def _entry_to_dict(e) -> dict:
+def _entry_to_dict(e) -> dict[str, Any]:
     return {
         "path": e.path,
         "index_status": e.index_status,
@@ -79,7 +73,7 @@ def _entry_to_dict(e) -> dict:
     }
 
 
-def _status_to_dict(status) -> dict:
+def _status_to_dict(status) -> dict[str, Any]:
     return {
         "staged": [_entry_to_dict(e) for e in status.staged],
         "unstaged": [_entry_to_dict(e) for e in status.unstaged],
@@ -97,71 +91,67 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
         "(HEAD state, branch, operation in progress).",
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def git_read_context() -> str:
+    def git_read_context() -> dict[str, Any]:
         repo = git_facts.read_repository(git)
         head = git_facts.read_head(git)
         status = git_facts.read_status(git)
-        return _json(
-            {
-                "repository": {
-                    "worktree_root": repo.worktree_root,
-                    "git_dir": repo.git_dir,
-                    "common_dir": repo.common_dir,
-                    "is_bare": repo.is_bare,
-                    "remotes": {
-                        name: {
-                            "fetch_url": _redact_url(urls["fetch_url"]),
-                            "push_url": _redact_url(urls["push_url"]),
-                        }
-                        for name, urls in repo.remotes.items()
-                    },
+        return {
+            "repository": {
+                "worktree_root": repo.worktree_root,
+                "git_dir": repo.git_dir,
+                "common_dir": repo.common_dir,
+                "is_bare": repo.is_bare,
+                "remotes": {
+                    name: {
+                        "fetch_url": _redact_url(urls["fetch_url"]),
+                        "push_url": _redact_url(urls["push_url"]),
+                    }
+                    for name, urls in repo.remotes.items()
                 },
-                "head": _head_to_dict(head),
-                "operation": status.operation.value,
-            }
-        )
+            },
+            "head": _head_to_dict(head),
+            "operation": status.operation.value,
+        }
 
     @mcp.tool(
         description="Read working tree and index status: staged, unstaged, "
         "untracked, ignored, conflicted files. Optionally include ignored files.",
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def git_read_status(include_ignored: bool = False) -> str:
+    def git_read_status(include_ignored: bool = False) -> dict[str, Any]:
         status = git_facts.read_status(git, include_ignored=include_ignored)
-        return _json(_status_to_dict(status))
+        return _status_to_dict(status)
 
     @mcp.tool(
         description="Read all refs (branches, tags, remotes) and registered worktrees.",
         annotations=ToolAnnotations(read_only_hint=True),
     )
-    def git_read_refs() -> str:
+    def git_read_refs() -> dict[str, Any]:
         refs = git_facts.read_refs(git)
         worktrees = git_facts.read_worktrees(git)
-        return _json(
-            {
-                "refs": [
-                    {
-                        "name": r.name,
-                        "object_id": r.object_id,
-                        "object_type": r.object_type,
-                        "symbolic_target": r.symbolic_target,
-                        "upstream": r.upstream,
-                    }
-                    for r in refs
-                ],
-                "worktrees": [
-                    {
-                        "path": w.path,
-                        "head": w.head,
-                        "branch": w.branch,
-                        "is_main": w.is_main,
-                        "is_locked": w.is_locked,
-                        "is_prunable": w.is_prunable,
-                    }
-                    for w in worktrees
-                ],
-            }
-        )
+        return {
+            "refs": [
+                {
+                    "name": r.name,
+                    "object_id": r.object_id,
+                    "object_type": r.object_type,
+                    "symbolic_target": r.symbolic_target,
+                    "upstream": r.upstream,
+                }
+                for r in refs
+            ],
+            "worktrees": [
+                {
+                    "path": w.path,
+                    "head": w.head,
+                    "branch": w.branch,
+                    "is_main": w.is_main,
+                    "is_locked": w.is_locked,
+                    "is_prunable": w.is_prunable,
+                }
+                for w in worktrees
+            ],
+        }
 
     @mcp.tool(
         description="Read diff with bounded output. Returns diff text, "
@@ -174,8 +164,8 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
         target: str = "",
         paths: list[str] | None = None,
         max_lines: int = 500,
-    ) -> str:
-        result = git_facts.read_diff(
+    ) -> dict[str, Any]:
+        return git_facts.read_diff(
             git,
             cached=cached,
             base=base or None,
@@ -183,7 +173,6 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
             paths=paths or None,
             max_lines=max_lines,
         )
-        return _json(result)
 
     @mcp.tool(
         description="Read commit facts: existence, type, parents. "
@@ -194,7 +183,7 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
         revision: str = "",
         ancestor: str = "",
         descendant: str = "",
-    ) -> str:
+    ) -> dict[str, Any]:
         result: dict[str, Any] = {}
         if revision:
             commit = git_facts.read_commit(git, revision)
@@ -210,7 +199,7 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
                 result["error"] = f"not a commit or does not exist: {revision}"
         if ancestor and descendant:
             result["is_ancestor"] = git_facts.is_ancestor(git, ancestor, descendant)
-        return _json(result)
+        return result
 
 
 def _register_mutation_tools(mcp: MCPServer, git) -> None:
@@ -220,8 +209,8 @@ def _register_mutation_tools(mcp: MCPServer, git) -> None:
         "Refuses if the branch already exists.",
         annotations=ToolAnnotations(destructive_hint=False),
     )
-    def git_branch_create(name: str, start_point: str = "HEAD") -> str:
-        return _json(git_mutations.branch_create(git, name, start_point))
+    def git_branch_create(name: str, start_point: str = "HEAD") -> dict[str, Any]:
+        return git_mutations.branch_create(git, name, start_point)
 
     @mcp.tool(
         description="Delete a local branch with safety checks. "
@@ -233,10 +222,8 @@ def _register_mutation_tools(mcp: MCPServer, git) -> None:
         name: str,
         expected_tip: str = "",
         retained_refs: list[str] | None = None,
-    ) -> str:
-        return _json(
-            git_mutations.branch_delete(git, name, expected_tip, retained_refs)
-        )
+    ) -> dict[str, Any]:
+        return git_mutations.branch_delete(git, name, expected_tip, retained_refs)
 
     @mcp.tool(
         description="Create a linked worktree at an explicit path with an "
@@ -248,10 +235,8 @@ def _register_mutation_tools(mcp: MCPServer, git) -> None:
         branch: str = "",
         start_point: str = "",
         detach: bool = False,
-    ) -> str:
-        return _json(
-            git_mutations.worktree_create(git, path, branch, start_point, detach)
-        )
+    ) -> dict[str, Any]:
+        return git_mutations.worktree_create(git, path, branch, start_point, detach)
 
     @mcp.tool(
         description="Remove a worktree after verifying loss surface. "
@@ -262,16 +247,16 @@ def _register_mutation_tools(mcp: MCPServer, git) -> None:
     def git_worktree_remove(
         path: str,
         expected_head: str = "",
-    ) -> str:
-        return _json(git_mutations.worktree_remove(git, path, expected_head))
+    ) -> dict[str, Any]:
+        return git_mutations.worktree_remove(git, path, expected_head)
 
     @mcp.tool(
         description="Stage explicit paths. Only stages the specified paths, "
         "does not absorb unknown adjacent files.",
         annotations=ToolAnnotations(destructive_hint=False),
     )
-    def git_stage(paths: list[str]) -> str:
-        return _json(git_mutations.stage(git, paths))
+    def git_stage(paths: list[str]) -> dict[str, Any]:
+        return git_mutations.stage(git, paths)
 
     @mcp.tool(
         description="Create a commit from the current index. "
@@ -282,8 +267,8 @@ def _register_mutation_tools(mcp: MCPServer, git) -> None:
     def git_commit(
         message: str,
         expected_head: str = "",
-    ) -> str:
-        return _json(git_mutations.commit(git, message, expected_head))
+    ) -> dict[str, Any]:
+        return git_mutations.commit(git, message, expected_head)
 
     @mcp.tool(
         description="Merge or rebase. Caller specifies the operation explicitly. "
@@ -295,18 +280,16 @@ def _register_mutation_tools(mcp: MCPServer, git) -> None:
         source: str = "",
         onto: str = "",
         expected_head: str = "",
-    ) -> str:
-        return _json(
-            git_mutations.integrate(git, operation, source, onto, expected_head)
-        )
+    ) -> dict[str, Any]:
+        return git_mutations.integrate(git, operation, source, onto, expected_head)
 
     @mcp.tool(
         description="Continue or abort an in-progress merge/rebase. "
         "Must be explicitly specified by the caller.",
         annotations=ToolAnnotations(destructive_hint=True),
     )
-    def git_integrate_continue(action: str) -> str:
-        return _json(git_mutations.integrate_continue(git, action))
+    def git_integrate_continue(action: str) -> dict[str, Any]:
+        return git_mutations.integrate_continue(git, action)
 
 
 def main() -> None:
