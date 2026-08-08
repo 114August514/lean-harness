@@ -412,8 +412,8 @@ branch naming、一个 Work Unit 使用几个 branch、何时创建 worktree，�
 
 merge / rebase 必须由调用方明确 source / upstream、target / onto 和操作模式。开始前
 index 和 tracked working tree 必须满足该操作要求，或现有修改已由 owner 通过明确且
-可恢复的方式保存；Git MCP 不自动 stash。操作可能 materialize 的 paths 还必须检查
-untracked / ignored collision，不能用普通 status clean 代替 loss-surface 判断。
+可恢复的方式保存；Git MCP 不自动 stash。Git 对 untracked collision 会原生拒绝；
+ignored 内容可能被静默覆盖，调用方应通过操作前的 status 读取自行评估风险。
 
 冲突是需要完整报告的 Git 工件状态，不是可以折叠成“命令失败”的字符串。实现必须
 保留 unmerged entries、冲突 paths 和 in-progress operation。如何解决冲突由 Skills /
