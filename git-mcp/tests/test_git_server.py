@@ -302,8 +302,8 @@ class TestServer:
         assert data["total_lines"] > 10
 
     @pytest.mark.asyncio()
-    async def test_merge_ignored_collision(self, repo: Path, git: GitRunner):
-        """Merge refuses when ignored local file would be overwritten."""
+    async def test_merge_ignored_file_overwritten(self, repo: Path, git: GitRunner):
+        """Git merge silently overwrites ignored files (documented behavior)."""
         mcp = self._make_server(repo)
         default_branch = read_head(git).branch
         assert default_branch is not None
@@ -322,12 +322,13 @@ class TestServer:
         await self._call(mcp, "git_commit", {"message": "ignore collision.txt"})
         (repo / "collision.txt").write_text("local ignored content\n")
 
-        # Merge should refuse due to ignored collision
+        # Merge succeeds; ignored file is silently overwritten (Git native behavior)
         data = await self._call(
             mcp, "git_integrate", {"operation": "merge", "source": "adds-file"}
         )
-        assert "collision" in data["error"].lower() or "untracked" in data["error"].lower()
-        assert "colliding_paths" in data or "collision.txt" in str(data)
+        assert data["success"] is True
+        # The ignored local file was overwritten by the merge
+        assert (repo / "collision.txt").read_text() == "from branch\n"
 
     @pytest.mark.asyncio()
     async def test_option_injection_rejected(self, repo: Path):
