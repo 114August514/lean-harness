@@ -77,18 +77,25 @@ class GitRunner:
             "GIT_PAGER": "cat",
             "PAGER": "cat",
         }
-        proc = subprocess.run(
-            ["git", *args],
-            cwd=self.work_dir,
-            env=env,
-            capture_output=True,
-            timeout=timeout,
-        )
-        result = GitResult(
-            returncode=proc.returncode,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
-        )
+        try:
+            proc = subprocess.run(
+                ["git", *args],
+                cwd=self.work_dir,
+                env=env,
+                capture_output=True,
+                timeout=timeout,
+            )
+            result = GitResult(
+                returncode=proc.returncode,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+            )
+        except subprocess.TimeoutExpired:
+            result = GitResult(
+                returncode=-1,
+                stdout=b"",
+                stderr=f"git {' '.join(args)}: timeout after {timeout}s".encode(),
+            )
         if check and not result.ok:
             raise GitError(result, args)
         return result
