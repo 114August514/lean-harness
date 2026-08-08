@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from git_mcp.git_exec import GitResult, GitRunner
+import pytest
+
+from git_mcp.git_exec import GitError, GitResult, GitRunner
 from git_mcp.git_facts import (
     HeadState,
     OperationState,
@@ -29,10 +31,9 @@ class TestRepository:
         assert info.is_bare is False
         assert ".git" in info.git_dir
 
-    def test_not_a_repo(self, tmp_path: Path):
-        g = GitRunner(tmp_path)
-        result = g.run(["rev-parse", "--is-inside-work-tree"], check=False)
-        assert not result.ok
+    def test_repository_read_fails_outside_repository(self, tmp_path: Path):
+        with pytest.raises(GitError):
+            read_repository(GitRunner(tmp_path))
 
 
 class TestHead:
@@ -59,9 +60,7 @@ class TestHead:
         assert head.state == HeadState.UNBORN
         assert head.commit is None
 
-    def test_head_read_failure_is_not_reported_as_unborn(
-        self, git: GitRunner, monkeypatch
-    ):
+    def test_head_timeout_reports_unavailable(self, git: GitRunner, monkeypatch):
         original_run = git.run
         failed = False
 
@@ -69,7 +68,12 @@ class TestHead:
             nonlocal failed
             if not failed and args[:1] == ["rev-parse"] and "HEAD" in args[-1]:
                 failed = True
-                return GitResult(returncode=-1, stdout=b"", stderr=b"HEAD read timeout")
+                return GitResult(
+                    returncode=-1,
+                    stdout=b"",
+                    stderr=b"HEAD read timeout",
+                    timed_out=True,
+                )
             return original_run(args, **kwargs)
 
         monkeypatch.setattr(git, "run", fail_head_resolution)
@@ -84,28 +88,56 @@ class TestHead:
 class TestStatus:
     def test_clean(self, git: GitRunner):
         status = read_status(git)
-        assert len(status.staged) == 0
-        assert len(status.unstaged) == 0
-        assert len(status.untracked) == 0
+        assert status.entries == []
         assert status.operation == OperationState.NONE
 
-    def test_staged(self, git: GitRunner, repo: Path):
+    def test_staged_change_has_only_index_status(self, git: GitRunner, repo: Path):
         (repo / "new.txt").write_text("new\n")
         run_git(["add", "new.txt"], repo)
-        status = read_status(git)
-        assert len(status.staged) == 1
-        assert status.staged[0].path == "new.txt"
 
-    def test_unstaged(self, git: GitRunner, repo: Path):
+        status = read_status(git)
+
+        assert [
+            (entry.path, entry.index_status, entry.worktree_status)
+            for entry in status.staged
+        ] == [("new.txt", "A", " ")]
+        assert status.unstaged == []
+
+    def test_unstaged_change_has_only_worktree_status(self, git: GitRunner, repo: Path):
         (repo / "file.txt").write_text("modified\n")
-        status = read_status(git)
-        assert len(status.unstaged) == 1
-        assert status.unstaged[0].path == "file.txt"
 
-    def test_untracked(self, git: GitRunner, repo: Path):
-        (repo / "untracked.txt").write_text("untracked\n")
         status = read_status(git)
-        assert len(status.untracked) == 1
+
+        assert [
+            (entry.path, entry.index_status, entry.worktree_status)
+            for entry in status.unstaged
+        ] == [("file.txt", " ", "M")]
+        assert status.staged == []
+
+    def test_untracked_path_preserves_status(self, git: GitRunner, repo: Path):
+        (repo / "untracked.txt").write_text("untracked\n")
+
+        status = read_status(git)
+
+        assert [
+            (entry.path, entry.index_status, entry.worktree_status)
+            for entry in status.untracked
+        ] == [("untracked.txt", "?", "?")]
+        assert status.staged == []
+        assert status.unstaged == []
+
+    def test_staged_rename_preserves_original_path(self, git: GitRunner, repo: Path):
+        run_git(["mv", "file.txt", "renamed.txt"], repo)
+
+        status = read_status(git)
+
+        assert len(status.staged) == 1
+        rename = status.staged[0]
+        assert rename.index_status == "R"
+        assert rename.worktree_status == " "
+        assert rename.path == "renamed.txt"
+        assert rename.original_path == "file.txt"
+        assert status.unstaged == []
 
     def test_ignored(self, git: GitRunner, repo: Path):
         (repo / ".gitignore").write_text("ignored.txt\n")

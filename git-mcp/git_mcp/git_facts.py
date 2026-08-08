@@ -259,7 +259,7 @@ def read_status(git: GitRunner, *, include_ignored: bool = False) -> StatusInfo:
             # ordinary entry: 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
             parts = record.split(b" ", 8)
             if len(parts) >= 9:
-                xy = parts[1].decode()
+                xy = parts[1].decode().replace(".", " ")
                 path = parts[8].decode("utf-8", errors="replace")
                 entries.append(
                     StatusEntry(
@@ -273,7 +273,7 @@ def read_status(git: GitRunner, *, include_ignored: bool = False) -> StatusInfo:
             # followed by original path in next NUL field
             parts = record.split(b" ", 9)
             if len(parts) >= 10:
-                xy = parts[1].decode()
+                xy = parts[1].decode().replace(".", " ")
                 path = parts[9].decode("utf-8", errors="replace")
                 orig = (
                     raw[i].decode("utf-8", errors="replace") if i < len(raw) else None
@@ -292,7 +292,7 @@ def read_status(git: GitRunner, *, include_ignored: bool = False) -> StatusInfo:
             # unmerged: u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>
             parts = record.split(b" ", 10)
             if len(parts) >= 11:
-                xy = parts[1].decode()
+                xy = parts[1].decode().replace(".", " ")
                 path = parts[10].decode("utf-8", errors="replace")
                 entries.append(
                     StatusEntry(

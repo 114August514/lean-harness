@@ -18,6 +18,7 @@ def run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     """Execute git command in test setup/teardown."""
     return subprocess.run(
         ["git", *args],
+        check=False,
         cwd=cwd,
         capture_output=True,
         text=True,

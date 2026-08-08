@@ -85,6 +85,7 @@ class GitRunner:
                 env=env,
                 capture_output=True,
                 timeout=timeout,
+                check=False,
             )
             result = GitResult(
                 returncode=proc.returncode,
