@@ -207,6 +207,21 @@ class TestServer:
         assert data["repository"]["worktree_root"] == str(repo)
 
     @pytest.mark.asyncio()
+    async def test_read_context_redacts_credentials(self, repo: Path):
+        """Remote URLs with embedded credentials are redacted in Agent output."""
+        mcp = self._make_server(repo)
+        _git(
+            ["remote", "add", "origin", "https://user:secret123@example.com/repo.git"],
+            repo,
+        )
+        data = await self._call(mcp, "git_read_context")
+        remotes = data["repository"]["remotes"]
+        assert "origin" in remotes
+        assert "secret123" not in remotes["origin"]["fetch_url"]
+        assert "user" not in remotes["origin"]["fetch_url"]
+        assert "example.com" in remotes["origin"]["fetch_url"]
+
+    @pytest.mark.asyncio()
     async def test_read_status_clean(self, repo: Path):
         mcp = self._make_server(repo)
         data = await self._call(mcp, "git_read_status")

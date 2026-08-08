@@ -10,12 +10,29 @@ import asyncio
 import json
 import sys
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
 from . import git_facts, git_mutations
 from .repository import bind_repository
+
+
+def _redact_url(url: str) -> str:
+    """Remove embedded credentials from a URL for Agent-facing output."""
+    if not url:
+        return url
+    try:
+        parts = urlsplit(url)
+        if parts.password or parts.username:
+            host = parts.hostname or ""
+            if parts.port:
+                host = f"{host}:{parts.port}"
+            return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+        return url
+    except ValueError:
+        return url
 
 
 def create_server(repo_path: str) -> MCPServer:
@@ -91,7 +108,13 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
                     "git_dir": repo.git_dir,
                     "common_dir": repo.common_dir,
                     "is_bare": repo.is_bare,
-                    "remotes": repo.remotes,
+                    "remotes": {
+                        name: {
+                            "fetch_url": _redact_url(urls["fetch_url"]),
+                            "push_url": _redact_url(urls["push_url"]),
+                        }
+                        for name, urls in repo.remotes.items()
+                    },
                 },
                 "head": _head_to_dict(head),
                 "operation": status.operation.value,
