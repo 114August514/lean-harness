@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from git_mcp.git_exec import GitRunner
-from git_mcp.git_facts import read_head
+from git_mcp import git_mutations
+from git_mcp.git_exec import GitResult, GitRunner
+from git_mcp.git_facts import read_head, read_worktrees
 
 from .conftest import run_git
 
@@ -28,6 +29,152 @@ class TestServer:
     async def _call(self, mcp, tool: str, args: dict | None = None) -> dict:
         result = await mcp.call_tool(tool, args or {})
         return result.structured_content
+
+    def _report_timeout_after(
+        self, monkeypatch, git: GitRunner, command_prefix: list[str]
+    ) -> None:
+        original_run = git.run
+        reported = False
+
+        def run_then_report_timeout(args, **kwargs):
+            nonlocal reported
+            result = original_run(args, **kwargs)
+            if not reported and args[: len(command_prefix)] == command_prefix:
+                reported = True
+                return GitResult(
+                    returncode=-1,
+                    stdout=b"",
+                    stderr=b"simulated timeout after command execution",
+                    timed_out=True,
+                )
+            return result
+
+        monkeypatch.setattr(git, "run", run_then_report_timeout)
+
+    def _report_timeout_before(
+        self, monkeypatch, git: GitRunner, command_prefix: list[str]
+    ) -> None:
+        original_run = git.run
+
+        def report_timeout(args, **kwargs):
+            if args[: len(command_prefix)] == command_prefix:
+                return GitResult(
+                    returncode=-1,
+                    stdout=b"",
+                    stderr=b"simulated timeout before command execution",
+                    timed_out=True,
+                )
+            return original_run(args, **kwargs)
+
+        monkeypatch.setattr(git, "run", report_timeout)
+
+    def test_branch_timeouts_reobserve_refs(
+        self, repo: Path, git: GitRunner, monkeypatch
+    ):
+        with monkeypatch.context() as patch:
+            self._report_timeout_after(patch, git, ["branch", "--"])
+            created = git_mutations.branch_create(git, "timeout-branch")
+
+        assert created["created"] == "timeout-branch"
+        assert created["tip"] == git.run_text(
+            ["rev-parse", "refs/heads/timeout-branch"]
+        )
+        assert "timeout" in created["command_error"]
+
+        with monkeypatch.context() as patch:
+            self._report_timeout_after(patch, git, ["update-ref", "-d"])
+            deleted = git_mutations.branch_delete(git, "timeout-branch")
+
+        assert deleted["deleted"] == "timeout-branch"
+        assert deleted["verified_gone"] is True
+        assert "timeout" in deleted["command_error"]
+
+    def test_stage_and_commit_timeouts_reobserve_index_and_head(
+        self, repo: Path, git: GitRunner, monkeypatch
+    ):
+        (repo / "timeout.txt").write_text("timeout\n")
+        with monkeypatch.context() as patch:
+            self._report_timeout_after(patch, git, ["add", "--"])
+            staged = git_mutations.stage(git, ["timeout.txt"])
+
+        assert staged["status"]["staged"] == [
+            {"path": "timeout.txt", "index_status": "A"}
+        ]
+        assert "timeout" in staged["error"]
+
+        before = read_head(git).commit
+        with monkeypatch.context() as patch:
+            self._report_timeout_after(patch, git, ["commit", "-m"])
+            committed = git_mutations.commit(git, "timeout commit")
+
+        assert committed["commit"] != before
+        assert committed["staged"] == []
+        assert "timeout" in committed["command_error"]
+
+    def test_stage_timeout_before_mutation_remains_uncertain(
+        self, repo: Path, git: GitRunner, monkeypatch
+    ):
+        (repo / "not-staged.txt").write_text("not staged\n")
+        self._report_timeout_before(monkeypatch, git, ["add", "--"])
+
+        result = git_mutations.stage(git, ["not-staged.txt"])
+
+        assert "timeout" in result["error"]
+        assert result["status"]["staged"] == []
+        assert result["status"]["untracked"] == [{"path": "not-staged.txt"}]
+
+    def test_worktree_timeouts_reobserve_registration_and_path(
+        self, repo: Path, git: GitRunner, tmp_path: Path, monkeypatch
+    ):
+        wt_path = tmp_path / "timeout-worktree"
+        with monkeypatch.context() as patch:
+            self._report_timeout_after(patch, git, ["worktree", "add"])
+            created = git_mutations.worktree_create(
+                git, str(wt_path), branch="timeout-worktree"
+            )
+
+        assert created["created"] == str(wt_path)
+        assert created["registration"]["path"] == str(wt_path)
+        assert created["path_exists"] is True
+        assert "timeout" in created["command_error"]
+
+        with monkeypatch.context() as patch:
+            self._report_timeout_after(patch, git, ["worktree", "remove"])
+            removed = git_mutations.worktree_remove(git, str(wt_path))
+
+        assert removed["removed"] == str(wt_path)
+        assert removed["registration"] is None
+        assert removed["path_exists"] is False
+        assert "timeout" in removed["command_error"]
+
+    def test_worktree_create_rejects_relative_path(
+        self, repo: Path, git: GitRunner, tmp_path: Path
+    ):
+        target = tmp_path / "relative-create"
+
+        result = git_mutations.worktree_create(git, "../relative-create")
+
+        assert "must be absolute" in result["error"]
+        assert not target.exists()
+        assert all(Path(worktree.path) != target for worktree in read_worktrees(git))
+
+    def test_worktree_remove_rejects_relative_path(
+        self, repo: Path, git: GitRunner, tmp_path: Path
+    ):
+        target = tmp_path / "relative-remove"
+        created = git_mutations.worktree_create(
+            git, str(target), branch="relative-remove"
+        )
+        assert created["created"] == str(target)
+
+        result = git_mutations.worktree_remove(git, "../relative-remove")
+
+        assert "must be absolute" in result["error"]
+        assert target.exists()
+        assert any(Path(worktree.path) == target for worktree in read_worktrees(git))
+
+        removed = git_mutations.worktree_remove(git, str(target))
+        assert removed["removed"] == str(target)
 
     @pytest.mark.asyncio()
     async def test_read_context(self, repo: Path):
@@ -87,7 +234,10 @@ class TestServer:
         data = await self._call(
             mcp,
             "git_branch_delete",
-            {"name": "stale-test", "expected_tip": "0000000000000000000000000000000000000000"},
+            {
+                "name": "stale-test",
+                "expected_tip": "0000000000000000000000000000000000000000",
+            },
         )
         assert "stale precondition" in data["error"]
 
@@ -99,9 +249,7 @@ class TestServer:
         mcp = self._make_server(repo)
         head = read_head(git)
         assert head.branch is not None
-        data = await self._call(
-            mcp, "git_branch_delete", {"name": head.branch}
-        )
+        data = await self._call(mcp, "git_branch_delete", {"name": head.branch})
         assert "checked out" in data["error"]
 
     @pytest.mark.asyncio()
@@ -149,7 +297,9 @@ class TestServer:
         assert data["verified_gone"] is True
 
     @pytest.mark.asyncio()
-    async def test_branch_delete_unreachable_from_retained(self, repo: Path, git: GitRunner):
+    async def test_branch_delete_unreachable_from_retained(
+        self, repo: Path, git: GitRunner
+    ):
         mcp = self._make_server(repo)
         default_branch = read_head(git).branch
         assert default_branch is not None
@@ -299,7 +449,9 @@ class TestServer:
         assert data["commit"] is None
         assert data["object_type"] == "tree"
         # 无法解析的 revision → 报错
-        data = await self._call(mcp, "git_read_commits", {"revision": "nonexistent-ref-xyz"})
+        data = await self._call(
+            mcp, "git_read_commits", {"revision": "nonexistent-ref-xyz"}
+        )
         assert data["commit"] is None
         assert "error" in data
 
@@ -317,12 +469,18 @@ class TestServer:
         c2 = run_git(["rev-parse", "HEAD"], repo).stdout.strip()
 
         # c1 是 c2 的祖先；c2 不是 c1 的祖先
-        data = await self._call(mcp, "git_read_commits", {"ancestor": c1, "descendant": c2})
+        data = await self._call(
+            mcp, "git_read_commits", {"ancestor": c1, "descendant": c2}
+        )
         assert data["is_ancestor"] is True
-        data = await self._call(mcp, "git_read_commits", {"ancestor": c2, "descendant": c1})
+        data = await self._call(
+            mcp, "git_read_commits", {"ancestor": c2, "descendant": c1}
+        )
         assert data["is_ancestor"] is False
         # 无法解析的 revision → 报错而非判为假
-        data = await self._call(mcp, "git_read_commits", {"ancestor": "bad-rev", "descendant": c1})
+        data = await self._call(
+            mcp, "git_read_commits", {"ancestor": "bad-rev", "descendant": c1}
+        )
         assert data["is_ancestor"] is None
         assert "ancestry_error" in data
 
@@ -379,13 +537,13 @@ class TestServer:
         assert (repo / "collision.txt").read_text() == "from branch\n"
 
     @pytest.mark.asyncio()
-    async def test_diff_base_is_treated_as_revision_not_option(self, repo: Path, tmp_path: Path):
+    async def test_diff_base_is_treated_as_revision_not_option(
+        self, repo: Path, tmp_path: Path
+    ):
         """base 以 '-' 开头时被当作 revision 解析并报错，不被当作 git option 执行。"""
         mcp = self._make_server(repo)
         target = tmp_path / "evil.txt"
-        data = await self._call(
-            mcp, "git_read_diff", {"base": f"--output={target}"}
-        )
+        data = await self._call(mcp, "git_read_diff", {"base": f"--output={target}"})
         assert "error" in data
         assert not target.exists()
 

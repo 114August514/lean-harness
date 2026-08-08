@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from git_mcp.git_exec import GitRunner
+from git_mcp.git_exec import GitResult, GitRunner
 from git_mcp.git_facts import (
     HeadState,
     OperationState,
@@ -58,6 +58,27 @@ class TestHead:
         head = read_head(g)
         assert head.state == HeadState.UNBORN
         assert head.commit is None
+
+    def test_head_read_failure_is_not_reported_as_unborn(
+        self, git: GitRunner, monkeypatch
+    ):
+        original_run = git.run
+        failed = False
+
+        def fail_head_resolution(args, **kwargs):
+            nonlocal failed
+            if not failed and args[:1] == ["rev-parse"] and "HEAD" in args[-1]:
+                failed = True
+                return GitResult(returncode=-1, stdout=b"", stderr=b"HEAD read timeout")
+            return original_run(args, **kwargs)
+
+        monkeypatch.setattr(git, "run", fail_head_resolution)
+
+        head = read_head(git)
+
+        assert head.state is None
+        assert head.commit is None
+        assert head.error == "HEAD read timeout"
 
 
 class TestStatus:

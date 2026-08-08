@@ -28,7 +28,9 @@ def _redact_url(url: str) -> str:
             host = parts.hostname or ""
             if parts.port:
                 host = f"{host}:{parts.port}"
-            return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+            return urlunsplit(
+                (parts.scheme, host, parts.path, parts.query, parts.fragment)
+            )
         return url
     except ValueError:
         return url
@@ -56,12 +58,15 @@ def create_server(repo_path: str) -> MCPServer:
 
 
 def _head_to_dict(head) -> dict[str, Any]:
-    return {
-        "state": head.state.value,
+    result: dict[str, Any] = {
+        "state": head.state.value if head.state else None,
         "branch": head.branch,
         "commit": head.commit,
         "upstream": head.upstream,
     }
+    if head.error:
+        result["error"] = head.error
+    return result
 
 
 def _entry_to_dict(e) -> dict[str, Any]:
@@ -246,8 +251,9 @@ def _register_mutation_tools(mcp: MCPServer, git) -> None:
         return git_mutations.branch_delete(git, name, expected_tip, retained_refs)
 
     @mcp.tool(
-        description="Create a linked worktree at an explicit path with an "
-        "explicit branch or detached start point.",
+        description="Create a linked worktree at an explicit absolute path. "
+        "Uses an explicit branch or detached start point when provided; "
+        "otherwise uses Git's native worktree-add defaults.",
         annotations=ToolAnnotations(destructive_hint=False),
     )
     def git_worktree_create(
@@ -259,9 +265,9 @@ def _register_mutation_tools(mcp: MCPServer, git) -> None:
         return git_mutations.worktree_create(git, path, branch, start_point, detach)
 
     @mcp.tool(
-        description="Remove a worktree after verifying loss surface. "
-        "Refuses if there are uncommitted changes, untracked files, "
-        "or the worktree is locked.",
+        description="Remove a worktree at an absolute path after verifying "
+        "loss surface. Refuses if there are uncommitted changes, untracked "
+        "files, or the worktree is locked.",
         annotations=ToolAnnotations(destructive_hint=True),
     )
     def git_worktree_remove(

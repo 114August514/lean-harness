@@ -31,10 +31,11 @@ class OperationState(Enum):
 
 @dataclass
 class HeadInfo:
-    state: HeadState
+    state: HeadState | None
     branch: str | None = None  # set when state == BRANCH
-    commit: str | None = None  # set when state != UNBORN
+    commit: str | None = None  # set when HEAD resolves to a commit
     upstream: str | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -194,32 +195,44 @@ def read_repository(git: GitRunner) -> RepositoryInfo:
 
 
 def read_head(git: GitRunner) -> HeadInfo:
-    """Read HEAD state: branch, detached, or unborn."""
-    # Try to resolve HEAD to a commit first
-    commit_result = git.run(["rev-parse", "HEAD"], check=False)
+    """Read HEAD state without conflating an unavailable read with unborn."""
+    commit_result = git.run(["rev-parse", "--verify", "HEAD^{commit}"], check=False)
     if not commit_result.ok:
-        return HeadInfo(state=HeadState.UNBORN)
+        symbolic_result = git.run(["symbolic-ref", "-q", "HEAD"], check=False)
+        if symbolic_result.ok:
+            symbolic_ref = symbolic_result.text.strip()
+            target_result = git.run(
+                ["show-ref", "--verify", "--quiet", symbolic_ref],
+                check=False,
+            )
+            if symbolic_ref.startswith("refs/heads/") and target_result.returncode == 1:
+                return HeadInfo(state=HeadState.UNBORN)
+        return HeadInfo(
+            state=None,
+            error=commit_result.error_text.strip() or "could not resolve HEAD",
+        )
 
     commit = commit_result.text.strip()
-
-    # HEAD resolves to a commit — check if on a branch
-    branch_result = git.run(["symbolic-ref", "--short", "HEAD"], check=False)
+    branch_result = git.run(["symbolic-ref", "--quiet", "--short", "HEAD"], check=False)
     if branch_result.ok:
         branch = branch_result.text.strip()
         upstream_result = git.run(
             ["rev-parse", "--abbrev-ref", "@{upstream}"], check=False
         )
-        upstream = (
-            upstream_result.text.strip() if upstream_result.ok else None
-        )
+        upstream = upstream_result.text.strip() if upstream_result.ok else None
         return HeadInfo(
             state=HeadState.BRANCH,
             branch=branch,
             commit=commit,
             upstream=upstream,
         )
-
-    return HeadInfo(state=HeadState.DETACHED, commit=commit)
+    if branch_result.returncode == 1:
+        return HeadInfo(state=HeadState.DETACHED, commit=commit)
+    return HeadInfo(
+        state=None,
+        commit=commit,
+        error=branch_result.error_text.strip() or "could not read HEAD ref state",
+    )
 
 
 def read_status(git: GitRunner, *, include_ignored: bool = False) -> StatusInfo:
@@ -263,9 +276,7 @@ def read_status(git: GitRunner, *, include_ignored: bool = False) -> StatusInfo:
                 xy = parts[1].decode()
                 path = parts[9].decode("utf-8", errors="replace")
                 orig = (
-                    raw[i].decode("utf-8", errors="replace")
-                    if i < len(raw)
-                    else None
+                    raw[i].decode("utf-8", errors="replace") if i < len(raw) else None
                 )
                 if i < len(raw):
                     i += 1
@@ -405,7 +416,9 @@ def probe_commit(git: GitRunner, rev: str) -> CommitProbe:
     """
     result = git.run(["cat-file", "-t", "--end-of-options", rev], check=False)
     if not result.ok:
-        return CommitProbe(commit=None, error=result.error_text or f"cannot resolve: {rev}")
+        return CommitProbe(
+            commit=None, error=result.error_text or f"cannot resolve: {rev}"
+        )
     obj_type = result.text.strip()
     if obj_type != "commit":
         # Object exists but is not a commit — legitimate absent, not an error.
@@ -451,7 +464,9 @@ def check_ancestor(git: GitRunner, ancestor: str, descendant: str) -> AncestryRe
         return AncestryResult(result=True)
     if result.returncode == 1:
         return AncestryResult(result=False)
-    return AncestryResult(result=None, error=result.error_text or "ancestry check failed")
+    return AncestryResult(
+        result=None, error=result.error_text or "ancestry check failed"
+    )
 
 
 def read_diff(

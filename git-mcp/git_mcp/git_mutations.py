@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .git_exec import GitRunner
+from .git_exec import GitError, GitRunner
 from .git_facts import (
     OperationState,
     check_ancestor,
@@ -23,31 +23,111 @@ from .git_facts import (
 
 
 def _head_to_dict(head) -> dict:
-    return {
-        "state": head.state.value,
+    result = {
+        "state": head.state.value if head.state else None,
         "branch": head.branch,
         "commit": head.commit,
         "upstream": head.upstream,
     }
+    if head.error:
+        result["error"] = head.error
+    return result
+
+
+def _observe_ref(git: GitRunner, ref: str) -> tuple[str | None, str | None]:
+    exists = git.run(["show-ref", "--verify", "--quiet", ref], check=False)
+    if exists.returncode == 1:
+        return None, None
+    if not exists.ok:
+        return None, exists.error_text
+
+    tip = git.run(["rev-parse", "--verify", ref], check=False)
+    if not tip.ok:
+        return None, tip.error_text
+    return tip.text.strip(), None
+
+
+def _status_to_dict(status) -> dict[str, Any]:
+    return {
+        "staged": [
+            {"path": entry.path, "index_status": entry.index_status}
+            for entry in status.staged
+        ],
+        "unstaged": [
+            {"path": entry.path, "worktree_status": entry.worktree_status}
+            for entry in status.unstaged
+        ],
+        "untracked": [{"path": entry.path} for entry in status.untracked],
+        "conflicted": [{"path": entry.path} for entry in status.conflicted],
+        "operation": status.operation.value,
+    }
+
+
+def _observe_worktree(
+    git: GitRunner, target: Path
+) -> tuple[dict | None, bool, str | None]:
+    path_exists = target.exists()
+    try:
+        worktrees = read_worktrees(git)
+    except GitError as error:
+        return None, path_exists, str(error)
+
+    for worktree in worktrees:
+        if Path(worktree.path).resolve() == target:
+            return (
+                {
+                    "path": worktree.path,
+                    "head": worktree.head,
+                    "branch": worktree.branch,
+                    "is_locked": worktree.is_locked,
+                    "is_prunable": worktree.is_prunable,
+                },
+                path_exists,
+                None,
+            )
+    return None, path_exists, None
 
 
 def branch_create(
     git: GitRunner, name: str, start_point: str = "HEAD"
 ) -> dict[str, Any]:
     """Create a branch at an explicit start point. Refuses if it already exists."""
-    check = git.run(["rev-parse", "--verify", f"refs/heads/{name}"], check=False)
-    if check.ok:
+    ref = f"refs/heads/{name}"
+    existing_tip, observation_error = _observe_ref(git, ref)
+    if observation_error:
+        return {"error": observation_error}
+    if existing_tip:
         return {
             "error": f"branch already exists: {name}",
-            "existing_tip": check.text.strip(),
+            "existing_tip": existing_tip,
         }
+
     sp = git.run(["rev-parse", start_point], check=False)
     if not sp.ok:
         return {"error": f"invalid start point: {start_point}"}
+
     result = git.run(["branch", "--", name, start_point], check=False)
     if not result.ok:
-        return {"error": result.error_text}
-    new_tip = git.run_text(["rev-parse", f"refs/heads/{name}"])
+        if not result.timed_out:
+            return {"error": result.error_text}
+        observed_tip, observation_error = _observe_ref(git, ref)
+        if observed_tip == sp.text.strip():
+            return {
+                "created": name,
+                "tip": observed_tip,
+                "start_point": sp.text.strip(),
+                "command_error": result.error_text,
+            }
+        response = {
+            "error": result.error_text,
+            "created": None,
+            "observed_tip": observed_tip,
+        }
+        if observation_error:
+            response["observation_error"] = observation_error
+        return response
+
+    new_tip = git.run_text(["rev-parse", ref])
     return {"created": name, "tip": new_tip, "start_point": sp.text.strip()}
 
 
@@ -59,10 +139,11 @@ def branch_delete(
 ) -> dict[str, Any]:
     """Delete a branch with compare-and-delete and optional reachability check."""
     ref = f"refs/heads/{name}"
-    current = git.run(["rev-parse", ref], check=False)
-    if not current.ok:
+    current_tip, observation_error = _observe_ref(git, ref)
+    if observation_error:
+        return {"error": observation_error}
+    if current_tip is None:
         return {"error": f"branch does not exist: {name}"}
-    current_tip = current.text.strip()
 
     if expected_tip and current_tip != expected_tip:
         return {
@@ -72,9 +153,7 @@ def branch_delete(
         }
 
     worktrees = read_worktrees(git)
-    checked_out_in = [
-        w.path for w in worktrees if w.branch == f"refs/heads/{name}"
-    ]
+    checked_out_in = [w.path for w in worktrees if w.branch == f"refs/heads/{name}"]
     if checked_out_in:
         return {
             "error": "branch checked out elsewhere",
@@ -113,7 +192,7 @@ def branch_delete(
             }
 
     deleted = git.run(["update-ref", "-d", ref, current_tip], check=False)
-    if not deleted.ok:
+    if not deleted.ok and not deleted.timed_out:
         return {
             "error": "compare-and-delete failed (ref moved or locked)",
             "ref": ref,
@@ -121,12 +200,26 @@ def branch_delete(
             "detail": deleted.error_text,
         }
 
-    gone = git.run(["rev-parse", ref], check=False)
-    return {
-        "deleted": name,
-        "was_tip": current_tip,
-        "verified_gone": not gone.ok,
+    observed_tip, observation_error = _observe_ref(git, ref)
+    if observed_tip is None and not observation_error:
+        response = {
+            "deleted": name,
+            "was_tip": current_tip,
+            "verified_gone": True,
+        }
+        if deleted.timed_out:
+            response["command_error"] = deleted.error_text
+        return response
+
+    response = {
+        "error": deleted.error_text or "branch deletion could not be verified",
+        "ref": ref,
+        "expected_tip": current_tip,
+        "observed_tip": observed_tip,
     }
+    if observation_error:
+        response["observation_error"] = observation_error
+    return response
 
 
 def worktree_create(
@@ -138,6 +231,9 @@ def worktree_create(
 ) -> dict[str, Any]:
     """Create a linked worktree at an explicit path."""
     target = Path(path)
+    if not target.is_absolute():
+        return {"error": f"worktree path must be absolute: {path}"}
+    target = target.resolve()
     if target.exists() and any(target.iterdir()):
         return {"error": f"target path not empty: {path}"}
 
@@ -146,19 +242,36 @@ def worktree_create(
         args.append("--detach")
     if branch:
         args.extend(["-b", branch])
-    args.append("--")
-    args.append(path)
+    args.extend(["--", path])
     if start_point:
         args.append(start_point)
 
     result = git.run(args, check=False)
     if not result.ok:
-        return {"error": result.error_text}
+        if not result.timed_out:
+            return {"error": result.error_text}
+        registration, path_exists, observation_error = _observe_worktree(git, target)
+        response: dict[str, Any] = {
+            "registration": registration,
+            "path_exists": path_exists,
+        }
+        if registration is not None and path_exists:
+            response.update(
+                {
+                    "created": str(target),
+                    "head": _head_to_dict(read_head(GitRunner(target))),
+                    "command_error": result.error_text,
+                }
+            )
+        else:
+            response["error"] = result.error_text
+        if observation_error:
+            response["observation_error"] = observation_error
+        return response
 
-    wt_git = GitRunner(target.resolve())
-    head = read_head(wt_git)
+    head = read_head(GitRunner(target))
     return {
-        "created": str(target.resolve()),
+        "created": str(target),
         "head": _head_to_dict(head),
     }
 
@@ -169,7 +282,10 @@ def worktree_remove(
     expected_head: str = "",
 ) -> dict[str, Any]:
     """Remove a worktree after verifying loss surface is empty."""
-    target = Path(path).resolve()
+    target = Path(path)
+    if not target.is_absolute():
+        return {"error": f"worktree path must be absolute: {path}"}
+    target = target.resolve()
     wt_git = GitRunner(target)
 
     worktrees = read_worktrees(git)
@@ -180,7 +296,6 @@ def worktree_remove(
 
     if wt.is_locked:
         return {"error": f"worktree is locked: {path}"}
-
     if wt.is_main:
         return {"error": "cannot remove main worktree"}
 
@@ -205,7 +320,6 @@ def worktree_remove(
             "loss_surface": loss,
             "worktree_head": wt.head,
         }
-
     if expected_head and wt.head != expected_head:
         return {
             "error": "stale precondition",
@@ -215,7 +329,26 @@ def worktree_remove(
 
     result = git.run(["worktree", "remove", str(target)], check=False)
     if not result.ok:
-        return {"error": result.error_text, "worktree": str(target)}
+        if not result.timed_out:
+            return {"error": result.error_text, "worktree": str(target)}
+        registration, path_exists, observation_error = _observe_worktree(git, target)
+        response: dict[str, Any] = {
+            "registration": registration,
+            "path_exists": path_exists,
+        }
+        if registration is None and not path_exists and not observation_error:
+            response.update(
+                {
+                    "removed": str(target),
+                    "was_head": wt.head,
+                    "command_error": result.error_text,
+                }
+            )
+        else:
+            response["error"] = result.error_text
+        if observation_error:
+            response["observation_error"] = observation_error
+        return response
     return {"removed": str(target), "was_head": wt.head}
 
 
@@ -223,16 +356,26 @@ def stage(git: GitRunner, paths: list[str]) -> dict[str, Any]:
     """Stage explicit paths."""
     if not paths:
         return {"error": "no paths specified"}
+
     result = git.run(["add", "--", *paths], check=False)
-    if not result.ok:
+    if not result.ok and not result.timed_out:
         return {"error": result.error_text}
-    status = read_status(git)
-    return {
-        "staged": [
-            {"path": e.path, "index_status": e.index_status}
-            for e in status.staged
-        ],
-    }
+
+    try:
+        status = read_status(git)
+    except GitError as error:
+        return {
+            "error": result.error_text or "staging result could not be observed",
+            "observation_error": str(error),
+        }
+
+    observed = _status_to_dict(status)
+    if result.timed_out:
+        return {
+            "error": result.error_text,
+            "status": observed,
+        }
+    return {"staged": observed["staged"]}
 
 
 def commit(
@@ -244,27 +387,62 @@ def commit(
     if not message.strip():
         return {"error": "empty commit message"}
 
-    if expected_head:
-        current = read_head(git)
-        if current.commit != expected_head:
-            return {
-                "error": "stale precondition",
-                "expected_head": expected_head,
-                "observed_head": current.commit,
-            }
+    before_head = read_head(git)
+    if before_head.error:
+        return {
+            "error": f"HEAD unavailable: {before_head.error}",
+            "head": _head_to_dict(before_head),
+        }
+    if expected_head and before_head.commit != expected_head:
+        return {
+            "error": "stale precondition",
+            "expected_head": expected_head,
+            "observed_head": before_head.commit,
+        }
 
     status = read_status(git)
     if not status.staged:
         return {"error": "no staged changes"}
 
     result = git.run(["commit", "-m", message], check=False)
-    if not result.ok:
+    if not result.ok and not result.timed_out:
         return {"error": result.error_text}
+
     head = read_head(git)
+    if result.timed_out:
+        try:
+            after_status = read_status(git)
+        except GitError as error:
+            return {
+                "error": result.error_text,
+                "head": _head_to_dict(head),
+                "observation_error": str(error),
+            }
+        observed_status = _status_to_dict(after_status)
+        if not head.error and head.commit != before_head.commit:
+            return {
+                "commit": head.commit,
+                "branch": head.branch,
+                "state": head.state.value if head.state else None,
+                "staged": observed_status["staged"],
+                "command_error": result.error_text,
+            }
+        return {
+            "error": result.error_text,
+            "before_head": _head_to_dict(before_head),
+            "head": _head_to_dict(head),
+            "status": observed_status,
+        }
+
+    if head.error:
+        return {
+            "error": f"commit created but HEAD observation failed: {head.error}",
+            "head": _head_to_dict(head),
+        }
     return {
         "commit": head.commit,
         "branch": head.branch,
-        "state": head.state.value,
+        "state": head.state.value if head.state else None,
     }
 
 
@@ -278,6 +456,11 @@ def integrate(
     """Merge or rebase with preconditions and after-observation."""
     if expected_head:
         current = read_head(git)
+        if current.error:
+            return {
+                "error": f"HEAD unavailable: {current.error}",
+                "head": _head_to_dict(current),
+            }
         if current.commit != expected_head:
             return {
                 "error": "stale precondition",
@@ -331,9 +514,7 @@ def integrate(
         if after_status.operation != OperationState.NONE:
             response["in_progress"] = after_status.operation.value
         if after_status.conflicted:
-            response["conflicted_files"] = [
-                e.path for e in after_status.conflicted
-            ]
+            response["conflicted_files"] = [e.path for e in after_status.conflicted]
     return response
 
 

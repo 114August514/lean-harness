@@ -396,8 +396,10 @@ worktree registration 等 Git 可观察事实；调用方负责建立 ownership�
 创建 branch 至少要求调用方明确 repository、完整 start-point 和新 ref name。实现必须
 拒绝意外覆盖已有 ref，并返回实际创建的 ref target。
 
-创建 worktree 至少要求调用方明确 repository、目标路径、branch 或 detached
-start-point。实现必须：
+创建 worktree 至少要求调用方明确 repository 和绝对目标路径；相对路径必须在任何
+filesystem 或 Git 操作前拒绝。调用方可以明确 branch 或 detached start-point；两者均
+未指定时，允许使用 `git worktree add` 的 Git 原生默认语义，并以操作后观察到的实际
+registration、HEAD / branch 和 status 为准。实现必须：
 
 - 确认目标路径不会覆盖已有现场；
 - 确认 branch 没有被另一个可变 worktree 占用；
@@ -448,7 +450,7 @@ cleanup 的目标是释放已经不再需要的 Git 工件，不是制造一个�
 
 删除 worktree 前必须确认：
 
-- target 是精确解析的 registered worktree，而不是宽泛路径或当前目录猜测；
+- target 是调用方明确提供的绝对路径，并精确解析到 registered worktree，而不是宽泛路径或当前目录猜测；
 - 已完成目标目录的 filesystem inventory，并分类 tracked changes、untracked、ignored、registered submodule、nested repository 和无法读取的内容；
 - inventory 中的每项内容都已保留、已验证可重建，或经 Policy 边界明确授权丢弃；
 - 需要保留的 commits 已从保留 ref 可达；

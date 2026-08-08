@@ -20,6 +20,7 @@ class GitResult:
     returncode: int
     stdout: bytes
     stderr: bytes
+    timed_out: bool = False
 
     @property
     def ok(self) -> bool:
@@ -95,6 +96,7 @@ class GitRunner:
                 returncode=-1,
                 stdout=b"",
                 stderr=f"git {' '.join(args)}: timeout after {timeout}s".encode(),
+                timed_out=True,
             )
         if check and not result.ok:
             raise GitError(result, args)
