@@ -1,7 +1,7 @@
-"""Tests for Local Git MCP capability.
+"""Tests for MCP server tool surface.
 
-Uses real Git repositories (tmp_path fixtures) to verify
-Git Contract semantics. No fake Git substitutes.
+Tests tool behavior, mutation semantics, and safety checks
+through the MCP server interface.
 """
 
 from __future__ import annotations
@@ -12,177 +12,9 @@ from pathlib import Path
 import pytest
 
 from git_mcp.git_exec import GitRunner
-from git_mcp.git_facts import (
-    HeadState,
-    OperationState,
-    is_ancestor,
-    read_commit,
-    read_head,
-    read_repository,
-    read_status,
-    read_worktrees,
-)
+from git_mcp.git_facts import read_head
 
-
-def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(cwd),
-            "LC_ALL": "C",
-            "GIT_TERMINAL_PROMPT": "0",
-        },
-    )
-
-
-@pytest.fixture()
-def repo(tmp_path: Path) -> Path:
-    """Create a minimal Git repository with one commit."""
-    r = tmp_path / "repo"
-    r.mkdir()
-    _git(["init"], r)
-    _git(["config", "user.name", "Test"], r)
-    _git(["config", "user.email", "test@test"], r)
-    (r / "file.txt").write_text("hello\n")
-    _git(["add", "file.txt"], r)
-    _git(["commit", "-m", "initial"], r)
-    return r
-
-
-@pytest.fixture()
-def git(repo: Path) -> GitRunner:
-    return GitRunner(repo)
-
-
-class TestRepository:
-    def test_read_repository(self, git: GitRunner, repo: Path):
-        info = read_repository(git)
-        assert info.worktree_root == str(repo)
-        assert info.is_bare is False
-        assert ".git" in info.git_dir
-
-    def test_not_a_repo(self, tmp_path: Path):
-        g = GitRunner(tmp_path)
-        result = g.run(["rev-parse", "--is-inside-work-tree"], check=False)
-        assert not result.ok
-
-
-class TestHead:
-    def test_branch_head(self, git: GitRunner):
-        head = read_head(git)
-        assert head.state == HeadState.BRANCH
-        assert head.branch is not None
-        assert head.commit is not None
-
-    def test_detached_head(self, git: GitRunner, repo: Path):
-        commit = git.run_text(["rev-parse", "HEAD"])
-        _git(["checkout", commit], repo)
-        head = read_head(git)
-        assert head.state == HeadState.DETACHED
-        assert head.commit == commit
-        assert head.branch is None
-
-    def test_unborn_head(self, tmp_path: Path):
-        r = tmp_path / "empty"
-        r.mkdir()
-        _git(["init"], r)
-        g = GitRunner(r)
-        head = read_head(g)
-        assert head.state == HeadState.UNBORN
-        assert head.commit is None
-
-
-class TestStatus:
-    def test_clean(self, git: GitRunner):
-        status = read_status(git)
-        assert len(status.staged) == 0
-        assert len(status.unstaged) == 0
-        assert len(status.untracked) == 0
-        assert status.operation == OperationState.NONE
-
-    def test_staged(self, git: GitRunner, repo: Path):
-        (repo / "new.txt").write_text("new\n")
-        _git(["add", "new.txt"], repo)
-        status = read_status(git)
-        assert len(status.staged) == 1
-        assert status.staged[0].path == "new.txt"
-
-    def test_unstaged(self, git: GitRunner, repo: Path):
-        (repo / "file.txt").write_text("modified\n")
-        status = read_status(git)
-        assert len(status.unstaged) == 1
-        assert status.unstaged[0].path == "file.txt"
-
-    def test_untracked(self, git: GitRunner, repo: Path):
-        (repo / "untracked.txt").write_text("untracked\n")
-        status = read_status(git)
-        assert len(status.untracked) == 1
-
-    def test_ignored(self, git: GitRunner, repo: Path):
-        (repo / ".gitignore").write_text("ignored.txt\n")
-        _git(["add", ".gitignore"], repo)
-        _git(["commit", "-m", "add gitignore"], repo)
-        (repo / "ignored.txt").write_text("ignored\n")
-        status = read_status(git, include_ignored=True)
-        assert len(status.ignored) == 1
-        assert status.ignored[0].path == "ignored.txt"
-
-    def test_conflict(self, git: GitRunner, repo: Path):
-        # Create a branch and make conflicting changes
-        _git(["checkout", "-b", "feature"], repo)
-        (repo / "file.txt").write_text("feature\n")
-        _git(["commit", "-am", "feature change"], repo)
-        _git(["checkout", "-"], repo)
-        (repo / "file.txt").write_text("main\n")
-        _git(["commit", "-am", "main change"], repo)
-        _git(["merge", "feature"], repo)
-
-        status = read_status(git)
-        assert len(status.conflicted) == 1
-        assert status.conflicted[0].path == "file.txt"
-        assert status.operation == OperationState.MERGE
-
-
-class TestWorktrees:
-    def test_single_worktree(self, git: GitRunner):
-        wts = read_worktrees(git)
-        assert len(wts) == 1
-        assert wts[0].is_main
-
-    def test_linked_worktree(self, git: GitRunner, repo: Path, tmp_path: Path):
-        wt_path = tmp_path / "linked"
-        _git(["worktree", "add", str(wt_path)], repo)
-        wts = read_worktrees(git)
-        assert len(wts) == 2
-        linked = [w for w in wts if not w.is_main]
-        assert len(linked) == 1
-        assert linked[0].path == str(wt_path)
-
-
-class TestCommits:
-    def test_read_head_commit(self, git: GitRunner):
-        commit = read_commit(git, "HEAD")
-        assert commit is not None
-        assert commit.object_type == "commit"
-        assert len(commit.parents) == 0  # initial commit
-
-    def test_nonexistent(self, git: GitRunner):
-        commit = read_commit(git, "0000000000000000000000000000000000000000")
-        assert commit is None
-
-    def test_ancestry(self, git: GitRunner, repo: Path):
-        first = git.run_text(["rev-parse", "HEAD"])
-        (repo / "second.txt").write_text("second\n")
-        _git(["add", "second.txt"], repo)
-        _git(["commit", "-m", "second"], repo)
-        second = git.run_text(["rev-parse", "HEAD"])
-
-        assert is_ancestor(git, first, second)
-        assert not is_ancestor(git, second, first)
+from .conftest import run_git
 
 
 class TestServer:
@@ -209,7 +41,7 @@ class TestServer:
     async def test_read_context_redacts_credentials(self, repo: Path):
         """Remote URLs with embedded credentials are redacted in Agent output."""
         mcp = self._make_server(repo)
-        _git(
+        run_git(
             ["remote", "add", "origin", "https://user:secret123@example.com/repo.git"],
             repo,
         )
@@ -324,14 +156,14 @@ class TestServer:
 
         # Create a branch and add a commit not on default branch
         await self._call(mcp, "git_branch_create", {"name": "diverged"})
-        _git(["checkout", "diverged"], repo)
+        run_git(["checkout", "diverged"], repo)
         (repo / "diverged.txt").write_text("diverged\n")
         await self._call(mcp, "git_stage", {"paths": ["diverged.txt"]})
         await self._call(mcp, "git_commit", {"message": "diverged commit"})
         tip = git.run_text(["rev-parse", "refs/heads/diverged"])
 
         # Switch back
-        _git(["checkout", default_branch], repo)
+        run_git(["checkout", default_branch], repo)
 
         # Try to delete with retained_refs=default_branch — diverged tip is NOT reachable
         data = await self._call(
@@ -478,13 +310,13 @@ class TestServer:
 
         # Create a branch that adds a file
         await self._call(mcp, "git_branch_create", {"name": "adds-file"})
-        _git(["checkout", "adds-file"], repo)
+        run_git(["checkout", "adds-file"], repo)
         (repo / "collision.txt").write_text("from branch\n")
         await self._call(mcp, "git_stage", {"paths": ["collision.txt"]})
         await self._call(mcp, "git_commit", {"message": "add collision.txt"})
 
         # Go back, ignore the file, create local version
-        _git(["checkout", default_branch], repo)
+        run_git(["checkout", default_branch], repo)
         (repo / ".gitignore").write_text("collision.txt\n")
         await self._call(mcp, "git_stage", {"paths": [".gitignore"]})
         await self._call(mcp, "git_commit", {"message": "ignore collision.txt"})
@@ -517,13 +349,13 @@ class TestServer:
 
         # Create a branch that adds a file
         await self._call(mcp, "git_branch_create", {"name": "branch-a"})
-        _git(["checkout", "branch-a"], repo)
+        run_git(["checkout", "branch-a"], repo)
         (repo / "new.txt").write_text("from branch-a\n")
         await self._call(mcp, "git_stage", {"paths": ["new.txt"]})
         await self._call(mcp, "git_commit", {"message": "branch-a adds new.txt"})
 
         # Go back and add same file with different content
-        _git(["checkout", default_branch], repo)
+        run_git(["checkout", default_branch], repo)
         (repo / "new.txt").write_text("from main\n")
         await self._call(mcp, "git_stage", {"paths": ["new.txt"]})
         await self._call(mcp, "git_commit", {"message": "main adds new.txt"})
