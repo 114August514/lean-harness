@@ -146,10 +146,37 @@ pagination / truncation 标记
 | worktree removal / branch deletion | **新增全部** |
 | 错误分类层 | **替换错误处理路径** |
 
-评估：mcp-server-git 是 GitPython 薄封装（约 600 行 server 代码）。
+评估：mcp-server-git 是 GitPython 薄封装（核心 `server.py` 约 490 行）。
 读取、mutation、错误处理三条核心路径都需要替换，还要引入 GitPython
 作为额外依赖（而 system Git executable 已被直接复用）。适配后
 基本不剩可复用的实质内容，还继承其 subprocess 间接层。
+
+### 混合方案：git-courer 读取面 + 自实现 mutation 层（方案 A3）
+
+复用优先原则要求检查这种组合：git-courer 的读取面（status/diff/history）
+相对接近需求，是否可能「复用其读取面 + 自实现 mutation 层」？
+
+经源码核实（审计 commit `80c84a4`），不可行：
+
+1. **无 tool filtering / read-only / 子集启动能力**。
+   `registerTools`（`internal/delivery/mcp/handlers.go:104-189`）无条件注册
+   全部 11 个工具（core、branch、session、rewrite、integrate、stage、
+   history、sync、utility、pr-review、backup），不存在任何 flag、
+   环境变量或 config 做能力裁剪。要把工具面收窄到只读，必须 fork 并
+   patch 注册函数——这正是复用优先原则中「长期 patch / fork」的情形。
+
+2. **即使 LLM 禁用，启动路径仍然 monolithic**。
+   `New()`（`internal/delivery/mcp/server.go`）无条件创建 LLM adapter、
+   commit workflow、security scanner、chunker、classifier、session store、
+   backup、release service。`llm.enabled=false` 只跳过 commit 消息生成，
+   不减少进程内的耦合面。
+
+3. **无法作为库复用**。
+   Go module 为 `main` package + `internal/`，外部无法 import 其读取
+   实现；「复用读取面」只能以运行其 MCP server 进程的方式实现，
+   回到第 1 条。
+
+因此混合方案不成立。
 
 ### 以 git-courer 为基底（方案 A2）
 
@@ -183,6 +210,8 @@ pagination / truncation 标记
 方案 A1 需要替换 mcp-server-git 的全部核心路径，剩余可复用内容趋近于零。
 方案 A2 需要替换 git-courer 的核心 mutation 路径并长期维护 harness 剥离，
 选择性复用的净价值很小。
+方案 A3（混合复用 git-courer 读取面）因其无 tool filtering、monolithic
+启动且无法作为库复用而不成立（证据见上）。
 
 两者都构成工作契约「复用优先」中允许重新实现的情形：
 
