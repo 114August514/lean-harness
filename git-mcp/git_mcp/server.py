@@ -238,7 +238,7 @@ def _register_mutation_tools(mcp: MCPServer) -> None:
         if not sp.ok:
             return _json({"error": f"invalid start point: {start_point}"})
         # Create
-        git.run(["branch", name, start_point])
+        git.run(["branch", "--", name, start_point])
         # After-observation
         new_tip = git.run_text(["rev-parse", f"refs/heads/{name}"])
         return _json({"created": name, "tip": new_tip, "start_point": sp.text.strip()})
@@ -304,7 +304,7 @@ def _register_mutation_tools(mcp: MCPServer) -> None:
                 )
 
         # Delete
-        git.run(["branch", "-d", name])
+        git.run(["branch", "-d", "--", name])
         # After-observation
         gone = git.run(["rev-parse", ref], check=False)
         return _json(
@@ -335,6 +335,7 @@ def _register_mutation_tools(mcp: MCPServer) -> None:
             args.append("--detach")
         if branch:
             args.extend(["-b", branch])
+        args.append("--")
         args.append(path)
         if start_point:
             args.append(start_point)
@@ -510,16 +511,34 @@ def _register_mutation_tools(mcp: MCPServer) -> None:
                 }
             )
 
+        # Precondition: index and tracked working tree must be clean
+        if status.staged or status.unstaged:
+            return _json(
+                {
+                    "error": "dirty worktree",
+                    "staged": [e.path for e in status.staged],
+                    "unstaged": [e.path for e in status.unstaged],
+                }
+            )
+        if status.conflicted:
+            return _json(
+                {
+                    "error": "unresolved conflicts",
+                    "conflicted": [e.path for e in status.conflicted],
+                }
+            )
+
         if operation == "merge":
             if not source:
                 return _json({"error": "merge requires source"})
-            result = git.run(["merge", source], check=False)
+            result = git.run(["merge", "--", source], check=False)
         elif operation == "rebase":
             if not source:
                 return _json({"error": "rebase requires source (upstream)"})
-            args = ["rebase", source]
+            args = ["rebase"]
             if onto:
                 args.extend(["--onto", onto])
+            args.extend(["--", source])
             result = git.run(args, check=False)
         else:
             return _json({"error": f"unknown operation: {operation}. Use merge or rebase."})
