@@ -496,3 +496,42 @@ class TestServer:
         )
         assert "collision" in data["error"].lower() or "untracked" in data["error"].lower()
         assert "colliding_paths" in data or "collision.txt" in str(data)
+
+    @pytest.mark.asyncio()
+    async def test_option_injection_rejected(self, repo: Path):
+        """Revisions starting with '-' are rejected by Git's --end-of-options."""
+        mcp = self._make_server(repo)
+        # Try to inject --output option via base parameter
+        data = await self._call(
+            mcp, "git_read_diff", {"base": "--output=/tmp/evil.txt"}
+        )
+        assert "error" in data
+        # Git should reject this as invalid option/revision
+
+    @pytest.mark.asyncio()
+    async def test_both_added_conflict(self, repo: Path, git: GitRunner):
+        """AA (both added) conflict is correctly classified."""
+        mcp = self._make_server(repo)
+        default_branch = read_head(git).branch
+        assert default_branch is not None
+
+        # Create a branch that adds a file
+        await self._call(mcp, "git_branch_create", {"name": "branch-a"})
+        _git(["checkout", "branch-a"], repo)
+        (repo / "new.txt").write_text("from branch-a\n")
+        await self._call(mcp, "git_stage", {"paths": ["new.txt"]})
+        await self._call(mcp, "git_commit", {"message": "branch-a adds new.txt"})
+
+        # Go back and add same file with different content
+        _git(["checkout", default_branch], repo)
+        (repo / "new.txt").write_text("from main\n")
+        await self._call(mcp, "git_stage", {"paths": ["new.txt"]})
+        await self._call(mcp, "git_commit", {"message": "main adds new.txt"})
+
+        # Merge should produce AA conflict
+        data = await self._call(
+            mcp, "git_integrate", {"operation": "merge", "source": "branch-a"}
+        )
+        assert data["success"] is False
+        assert "conflicted_files" in data
+        assert "new.txt" in data["conflicted_files"]
