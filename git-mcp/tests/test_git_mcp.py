@@ -263,12 +263,76 @@ class TestServer:
         mcp = self._make_server(repo)
         (repo / "stage-me.txt").write_text("staged\n")
 
-        data = await self._call(mcp, "git_stage", {"paths": "stage-me.txt"})
+        data = await self._call(mcp, "git_stage", {"paths": ["stage-me.txt"]})
         assert len(data["staged"]) == 1
 
         data = await self._call(mcp, "git_commit", {"message": "add stage-me"})
         assert data["commit"] is not None
         assert data["state"] == "branch"
+
+    @pytest.mark.asyncio()
+    async def test_stage_path_with_spaces(self, repo: Path):
+        mcp = self._make_server(repo)
+        (repo / "my file.txt").write_text("spaced\n")
+
+        data = await self._call(mcp, "git_stage", {"paths": ["my file.txt"]})
+        assert len(data["staged"]) == 1
+        assert data["staged"][0]["path"] == "my file.txt"
+
+    @pytest.mark.asyncio()
+    async def test_branch_delete_with_retained_refs(self, repo: Path, git: GitRunner):
+        mcp = self._make_server(repo)
+        default_branch = read_head(git).branch
+        assert default_branch is not None
+
+        # Create a branch at HEAD (reachable from default branch)
+        await self._call(mcp, "git_branch_create", {"name": "safe-delete"})
+        tip = git.run_text(["rev-parse", "refs/heads/safe-delete"])
+
+        # Delete with retained_refs pointing at default branch (which contains tip)
+        data = await self._call(
+            mcp,
+            "git_branch_delete",
+            {
+                "name": "safe-delete",
+                "expected_tip": tip,
+                "retained_refs": [default_branch],
+            },
+        )
+        assert data["deleted"] == "safe-delete"
+        assert data["verified_gone"] is True
+
+    @pytest.mark.asyncio()
+    async def test_branch_delete_unreachable_from_retained(self, repo: Path, git: GitRunner):
+        mcp = self._make_server(repo)
+        default_branch = read_head(git).branch
+        assert default_branch is not None
+
+        # Create a branch and add a commit not on default branch
+        await self._call(mcp, "git_branch_create", {"name": "diverged"})
+        _git(["checkout", "diverged"], repo)
+        (repo / "diverged.txt").write_text("diverged\n")
+        await self._call(mcp, "git_stage", {"paths": ["diverged.txt"]})
+        await self._call(mcp, "git_commit", {"message": "diverged commit"})
+        tip = git.run_text(["rev-parse", "refs/heads/diverged"])
+
+        # Switch back
+        _git(["checkout", default_branch], repo)
+
+        # Try to delete with retained_refs=default_branch — diverged tip is NOT reachable
+        data = await self._call(
+            mcp,
+            "git_branch_delete",
+            {
+                "name": "diverged",
+                "expected_tip": tip,
+                "retained_refs": [default_branch],
+            },
+        )
+        assert "not reachable" in data["error"]
+
+        # Cleanup
+        await self._call(mcp, "git_branch_delete", {"name": "diverged"})
 
     @pytest.mark.asyncio()
     async def test_commit_empty_staging(self, repo: Path):
@@ -280,7 +344,7 @@ class TestServer:
     async def test_commit_stale_head(self, repo: Path):
         mcp = self._make_server(repo)
         (repo / "file.txt").write_text("changed\n")
-        await self._call(mcp, "git_stage", {"paths": "file.txt"})
+        await self._call(mcp, "git_stage", {"paths": ["file.txt"]})
 
         data = await self._call(
             mcp,
@@ -333,7 +397,7 @@ class TestServer:
         # Create conflicting branches
         await self._call(mcp, "git_branch_create", {"name": "conflict-branch"})
         (repo / "file.txt").write_text("main version\n")
-        await self._call(mcp, "git_stage", {"paths": "file.txt"})
+        await self._call(mcp, "git_stage", {"paths": ["file.txt"]})
         await self._call(mcp, "git_commit", {"message": "main change"})
 
         # Switch to conflict-branch and make conflicting change
@@ -343,7 +407,7 @@ class TestServer:
             capture_output=True,
         )
         (repo / "file.txt").write_text("branch version\n")
-        await self._call(mcp, "git_stage", {"paths": "file.txt"})
+        await self._call(mcp, "git_stage", {"paths": ["file.txt"]})
         await self._call(mcp, "git_commit", {"message": "branch change"})
 
         # Switch back and try to merge

@@ -17,7 +17,6 @@ from mcp.types import ToolAnnotations
 
 from .git_exec import GitRunner
 from .git_facts import (
-    HeadState,
     OperationState,
     is_ancestor,
     read_commit,
@@ -30,18 +29,15 @@ from .git_facts import (
 )
 
 server: MCPServer | None = None
-_git: GitRunner | None = None
 
 
 def create_server(repo_path: str) -> MCPServer:
     """Create and configure the MCP server for a repository."""
-    global server, _git
-
     repo = Path(repo_path).resolve()
-    _git = GitRunner(repo)
+    git = GitRunner(repo)
 
     # Verify it's a Git repository
-    result = _git.run(["rev-parse", "--is-inside-work-tree"], check=False)
+    result = git.run(["rev-parse", "--is-inside-work-tree"], check=False)
     if not result.ok or result.text.strip() != "true":
         print(f"Error: {repo} is not a Git repository", file=sys.stderr)
         sys.exit(1)
@@ -56,10 +52,9 @@ def create_server(repo_path: str) -> MCPServer:
         ),
     )
 
-    _register_read_tools(mcp)
-    _register_mutation_tools(mcp)
+    _register_read_tools(mcp, git)
+    _register_mutation_tools(mcp, git)
 
-    server = mcp
     return mcp
 
 
@@ -97,9 +92,7 @@ def _status_to_dict(status) -> dict:
     }
 
 
-def _register_read_tools(mcp: MCPServer) -> None:
-    assert _git is not None
-    git = _git
+def _register_read_tools(mcp: MCPServer, git: GitRunner) -> None:
 
     @mcp.tool(
         description="Read repository identity, layout, and current context "
@@ -175,16 +168,15 @@ def _register_read_tools(mcp: MCPServer) -> None:
         cached: bool = False,
         base: str = "",
         target: str = "",
-        paths: str = "",
+        paths: list[str] | None = None,
         max_lines: int = 500,
     ) -> str:
-        path_list = [p for p in paths.split() if p] if paths else None
         result = read_diff(
             git,
             cached=cached,
             base=base or None,
             target=target or None,
-            paths=path_list,
+            paths=paths or None,
             max_lines=max_lines,
         )
         return _json(result)
@@ -217,9 +209,7 @@ def _register_read_tools(mcp: MCPServer) -> None:
         return _json(result)
 
 
-def _register_mutation_tools(mcp: MCPServer) -> None:
-    assert _git is not None
-    git = _git
+def _register_mutation_tools(mcp: MCPServer, git: GitRunner) -> None:
 
     @mcp.tool(
         description="Create a new branch at an explicit start point. "
@@ -252,7 +242,7 @@ def _register_mutation_tools(mcp: MCPServer) -> None:
     def git_branch_delete(
         name: str,
         expected_tip: str = "",
-        retained_refs: str = "",
+        retained_refs: list[str] | None = None,
     ) -> str:
         # Read current tip
         ref = f"refs/heads/{name}"
@@ -284,15 +274,17 @@ def _register_mutation_tools(mcp: MCPServer) -> None:
                 }
             )
 
-        # Check reachability from retained refs
+        # Resolve retained refs once, pin their OIDs, verify reachability
+        pinned_retained: list[tuple[str, str]] = []
         if retained_refs:
-            retained_list = [r.strip() for r in retained_refs.split(",") if r.strip()]
             unreachable_from: list[str] = []
-            for rr in retained_list:
+            for rr in retained_refs:
                 rr_resolved = git.run(["rev-parse", rr], check=False)
                 if not rr_resolved.ok:
                     return _json({"error": f"retained ref not found: {rr}"})
-                if not is_ancestor(git, current_tip, rr_resolved.text.strip()):
+                rr_oid = rr_resolved.text.strip()
+                pinned_retained.append((rr, rr_oid))
+                if not is_ancestor(git, current_tip, rr_oid):
                     unreachable_from.append(rr)
             if unreachable_from:
                 return _json(
@@ -303,8 +295,33 @@ def _register_mutation_tools(mcp: MCPServer) -> None:
                     }
                 )
 
-        # Delete
-        git.run(["branch", "-d", "--", name])
+        # Re-verify retained refs haven't moved since the reachability check
+        for rr, rr_oid in pinned_retained:
+            moved = git.run(["rev-parse", rr], check=False)
+            if not moved.ok or moved.text.strip() != rr_oid:
+                return _json(
+                    {
+                        "error": "retained ref moved during check",
+                        "ref": rr,
+                        "expected": rr_oid,
+                        "observed": moved.text.strip() if moved.ok else None,
+                    }
+                )
+
+        # Atomic compare-and-delete: refuses if the ref moved since read
+        deleted = git.run(
+            ["update-ref", "-d", ref, current_tip], check=False
+        )
+        if not deleted.ok:
+            return _json(
+                {
+                    "error": "compare-and-delete failed (ref moved or locked)",
+                    "ref": ref,
+                    "expected_tip": current_tip,
+                    "detail": deleted.error_text,
+                }
+            )
+
         # After-observation
         gone = git.run(["rev-parse", ref], check=False)
         return _json(
@@ -421,11 +438,10 @@ def _register_mutation_tools(mcp: MCPServer) -> None:
         "does not absorb unknown adjacent files.",
         annotations=ToolAnnotations(destructive_hint=False),
     )
-    def git_stage(paths: str) -> str:
-        if not paths.strip():
+    def git_stage(paths: list[str]) -> str:
+        if not paths:
             return _json({"error": "no paths specified"})
-        path_list = [p for p in paths.split() if p]
-        git.run(["add", "--", *path_list])
+        git.run(["add", "--", *paths])
         # After-observation
         status = read_status(git)
         return _json(
