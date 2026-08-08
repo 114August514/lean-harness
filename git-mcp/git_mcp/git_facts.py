@@ -444,3 +444,31 @@ def read_diff(
         "truncated": truncated,
         "total_lines": len(result.lines()),
     }
+
+
+def read_merge_touch_set(git: GitRunner, source: str) -> list[str] | None:
+    """Get files that a merge from source would touch.
+
+    Returns None if the merge base cannot be determined.
+    """
+    result = git.run(
+        ["diff", "--name-only", "--end-of-options", f"HEAD...{source}"],
+        check=False,
+    )
+    if not result.ok:
+        return None
+    return [line for line in result.lines() if line]
+
+
+def read_rebase_touch_set(git: GitRunner, upstream: str) -> list[str] | None:
+    """Get files that a rebase onto upstream would replay.
+
+    Returns None if the upstream cannot be determined.
+    """
+    result = git.run(
+        ["diff", "--name-only", "--end-of-options", f"{upstream}...HEAD"],
+        check=False,
+    )
+    if not result.ok:
+        return None
+    return [line for line in result.lines() if line]

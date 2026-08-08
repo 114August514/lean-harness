@@ -454,3 +454,31 @@ class TestServer:
         data = await self._call(mcp, "git_read_diff", {"max_lines": 10})
         assert data["truncated"] is True
         assert data["total_lines"] > 10
+
+    @pytest.mark.asyncio()
+    async def test_merge_ignored_collision(self, repo: Path, git: GitRunner):
+        """Merge refuses when ignored local file would be overwritten."""
+        mcp = self._make_server(repo)
+        default_branch = read_head(git).branch
+        assert default_branch is not None
+
+        # Create a branch that adds a file
+        await self._call(mcp, "git_branch_create", {"name": "adds-file"})
+        _git(["checkout", "adds-file"], repo)
+        (repo / "collision.txt").write_text("from branch\n")
+        await self._call(mcp, "git_stage", {"paths": ["collision.txt"]})
+        await self._call(mcp, "git_commit", {"message": "add collision.txt"})
+
+        # Go back, ignore the file, create local version
+        _git(["checkout", default_branch], repo)
+        (repo / ".gitignore").write_text("collision.txt\n")
+        await self._call(mcp, "git_stage", {"paths": [".gitignore"]})
+        await self._call(mcp, "git_commit", {"message": "ignore collision.txt"})
+        (repo / "collision.txt").write_text("local ignored content\n")
+
+        # Merge should refuse due to ignored collision
+        data = await self._call(
+            mcp, "git_integrate", {"operation": "merge", "source": "adds-file"}
+        )
+        assert "collision" in data["error"].lower() or "untracked" in data["error"].lower()
+        assert "colliding_paths" in data or "collision.txt" in str(data)

@@ -17,6 +17,8 @@ from .git_facts import (
     OperationState,
     is_ancestor,
     read_head,
+    read_merge_touch_set,
+    read_rebase_touch_set,
     read_status,
     read_worktrees,
 )
@@ -282,7 +284,7 @@ def integrate(
                 "observed_head": current.commit,
             }
 
-    status = read_status(git)
+    status = read_status(git, include_ignored=True)
     if status.operation != OperationState.NONE:
         return {
             "error": "operation already in progress",
@@ -304,17 +306,35 @@ def integrate(
     if operation == "merge":
         if not source:
             return {"error": "merge requires source"}
-        result = git.run(["merge", "--end-of-options", source], check=False)
+        touch_set = read_merge_touch_set(git, source)
     elif operation == "rebase":
         if not source:
             return {"error": "rebase requires source (upstream)"}
+        touch_set = read_rebase_touch_set(git, source)
+    else:
+        return {"error": f"unknown operation: {operation}. Use merge or rebase."}
+
+    # Check for untracked/ignored collision with files the operation would touch
+    if touch_set is not None:
+        local_untracked = {e.path for e in status.untracked}
+        local_ignored = {e.path for e in status.ignored}
+        local_paths = local_untracked | local_ignored
+        collisions = [p for p in touch_set if p in local_paths]
+        if collisions:
+            return {
+                "error": "untracked/ignored collision",
+                "colliding_paths": collisions,
+                "hint": "these local files would be overwritten",
+            }
+
+    if operation == "merge":
+        result = git.run(["merge", "--end-of-options", source], check=False)
+    else:
         args = ["rebase"]
         if onto:
             args.extend(["--onto", onto])
         args.extend(["--end-of-options", source])
         result = git.run(args, check=False)
-    else:
-        return {"error": f"unknown operation: {operation}. Use merge or rebase."}
 
     head = read_head(git)
     after_status = read_status(git)
