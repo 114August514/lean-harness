@@ -53,22 +53,22 @@ def _head_to_dict(head) -> dict:
     }
 
 
+def _entry_to_dict(e) -> dict:
+    return {
+        "path": e.path,
+        "index_status": e.index_status,
+        "worktree_status": e.worktree_status,
+        "original_path": e.original_path,
+    }
+
+
 def _status_to_dict(status) -> dict:
     return {
-        "staged": [
-            {"path": e.path, "index_status": e.index_status, "worktree_status": e.worktree_status, "original_path": e.original_path}
-            for e in status.staged
-        ],
-        "unstaged": [
-            {"path": e.path, "index_status": e.index_status, "worktree_status": e.worktree_status, "original_path": e.original_path}
-            for e in status.unstaged
-        ],
+        "staged": [_entry_to_dict(e) for e in status.staged],
+        "unstaged": [_entry_to_dict(e) for e in status.unstaged],
         "untracked": [{"path": e.path} for e in status.untracked],
         "ignored": [{"path": e.path} for e in status.ignored],
-        "conflicted": [
-            {"path": e.path, "index_status": e.index_status, "worktree_status": e.worktree_status}
-            for e in status.conflicted
-        ],
+        "conflicted": [_entry_to_dict(e) for e in status.conflicted],
         "operation": status.operation.value,
     }
 

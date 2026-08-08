@@ -44,7 +44,9 @@ def branch_create(
     sp = git.run(["rev-parse", start_point], check=False)
     if not sp.ok:
         return {"error": f"invalid start point: {start_point}"}
-    git.run(["branch", "--", name, start_point])
+    result = git.run(["branch", "--", name, start_point], check=False)
+    if not result.ok:
+        return {"error": result.error_text}
     new_tip = git.run_text(["rev-parse", f"refs/heads/{name}"])
     return {"created": name, "tip": new_tip, "start_point": sp.text.strip()}
 
@@ -176,6 +178,9 @@ def worktree_remove(
     if wt.is_locked:
         return {"error": f"worktree is locked: {path}"}
 
+    if wt.is_main:
+        return {"error": "cannot remove main worktree"}
+
     status = read_status(wt_git, include_ignored=True)
     loss: dict[str, Any] = {}
     if status.staged:
@@ -205,7 +210,9 @@ def worktree_remove(
             "observed_head": wt.head,
         }
 
-    git.run(["worktree", "remove", str(target)])
+    result = git.run(["worktree", "remove", str(target)], check=False)
+    if not result.ok:
+        return {"error": result.error_text, "worktree": str(target)}
     return {"removed": str(target), "was_head": wt.head}
 
 
@@ -213,7 +220,9 @@ def stage(git: GitRunner, paths: list[str]) -> dict[str, Any]:
     """Stage explicit paths."""
     if not paths:
         return {"error": "no paths specified"}
-    git.run(["add", "--", *paths])
+    result = git.run(["add", "--", *paths], check=False)
+    if not result.ok:
+        return {"error": result.error_text}
     status = read_status(git)
     return {
         "staged": [
@@ -234,7 +243,7 @@ def commit(
 
     if expected_head:
         current = read_head(git)
-        if current.commit and current.commit != expected_head:
+        if current.commit != expected_head:
             return {
                 "error": "stale precondition",
                 "expected_head": expected_head,
@@ -245,7 +254,9 @@ def commit(
     if not status.staged:
         return {"error": "no staged changes"}
 
-    git.run(["commit", "-m", message])
+    result = git.run(["commit", "-m", message], check=False)
+    if not result.ok:
+        return {"error": result.error_text}
     head = read_head(git)
     return {
         "commit": head.commit,
@@ -264,7 +275,7 @@ def integrate(
     """Merge or rebase with preconditions and after-observation."""
     if expected_head:
         current = read_head(git)
-        if current.commit and current.commit != expected_head:
+        if current.commit != expected_head:
             return {
                 "error": "stale precondition",
                 "expected_head": expected_head,
