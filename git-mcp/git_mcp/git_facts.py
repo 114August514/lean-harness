@@ -43,6 +43,7 @@ class StatusEntry:
     index_status: str  # single char: M A D R C U ? !
     worktree_status: str  # single char
     original_path: str | None = None  # set for renames/copies
+    is_unmerged: bool = False  # True for conflict records (kind "u")
 
 
 @dataclass
@@ -55,7 +56,7 @@ class StatusInfo:
         return [
             e
             for e in self.entries
-            if e.index_status not in (" ", "?", "!")
+            if e.index_status not in (" ", "?", "!") and not e.is_unmerged
         ]
 
     @property
@@ -65,6 +66,7 @@ class StatusInfo:
             for e in self.entries
             if e.worktree_status not in (" ", "?", "!")
             and e.index_status != "?"
+            and not e.is_unmerged
         ]
 
     @property
@@ -77,11 +79,7 @@ class StatusInfo:
 
     @property
     def conflicted(self) -> list[StatusEntry]:
-        return [
-            e
-            for e in self.entries
-            if e.index_status == "U" or e.worktree_status == "U"
-        ]
+        return [e for e in self.entries if e.is_unmerged]
 
 
 @dataclass
@@ -251,6 +249,7 @@ def read_status(git: GitRunner, *, include_ignored: bool = False) -> StatusInfo:
                         path=path,
                         index_status=xy[0],
                         worktree_status=xy[1],
+                        is_unmerged=True,
                     )
                 )
         elif kind == "?":
