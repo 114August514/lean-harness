@@ -110,6 +110,45 @@ class CommitInfo:
 
 
 @dataclass
+class CommitProbe:
+    """Result of probing a revision for commit facts.
+
+    commit is None when the object is not a commit or is unresolvable.
+    object_type carries the real type when the object exists but isn't a commit.
+    error is set only on read failure (unresolvable rev / timeout).
+    """
+
+    commit: CommitInfo | None
+    object_type: str | None = None
+    error: str | None = None
+
+
+@dataclass
+class AncestryResult:
+    """Result of an ancestry check.
+
+    result is True/False for a definitive answer, None when the check
+    could not be performed (error is then set).
+    """
+
+    result: bool | None
+    error: str | None = None
+
+
+@dataclass
+class DiffInfo:
+    """Bounded diff output with a truncation indicator.
+
+    error is set only when the diff could not be produced.
+    """
+
+    diff: str = ""
+    truncated: bool = False
+    total_lines: int = 0
+    error: str | None = None
+
+
+@dataclass
 class RepositoryInfo:
     worktree_root: str
     git_dir: str
@@ -358,20 +397,25 @@ def read_refs(git: GitRunner) -> list[RefInfo]:
     return refs
 
 
-def read_commit(git: GitRunner, rev: str) -> CommitInfo | None:
-    """Read commit facts. Returns None if the object doesn't exist or isn't a commit."""
+def probe_commit(git: GitRunner, rev: str) -> CommitProbe:
+    """Read commit facts, distinguishing missing/wrong-type from read error.
+
+    cat-file -t: 0 = object exists (type in output), 128 = unresolvable rev.
+    A rev that exists but isn't a commit is a legitimate absent, not an error.
+    """
     result = git.run(["cat-file", "-t", "--end-of-options", rev], check=False)
     if not result.ok:
-        return None
+        return CommitProbe(commit=None, error=result.error_text or f"cannot resolve: {rev}")
     obj_type = result.text.strip()
     if obj_type != "commit":
-        return None
+        # Object exists but is not a commit — legitimate absent, not an error.
+        return CommitProbe(commit=None, object_type=obj_type)
 
     parents_result = git.run(
         ["cat-file", "commit", "--end-of-options", rev], check=False
     )
     if not parents_result.ok:
-        return None
+        return CommitProbe(commit=None, error=parents_result.error_text)
 
     tree = ""
     parents: list[str] = []
@@ -383,21 +427,31 @@ def read_commit(git: GitRunner, rev: str) -> CommitInfo | None:
         elif line == "":
             break
 
-    return CommitInfo(
-        object_id=git.run_text(["rev-parse", rev]),
-        object_type=obj_type,
-        parents=parents,
-        tree=tree,
+    return CommitProbe(
+        commit=CommitInfo(
+            object_id=git.run_text(["rev-parse", rev]),
+            object_type=obj_type,
+            parents=parents,
+            tree=tree,
+        )
     )
 
 
-def is_ancestor(git: GitRunner, ancestor: str, descendant: str) -> bool:
-    """Check if ancestor is an ancestor of descendant."""
+def check_ancestor(git: GitRunner, ancestor: str, descendant: str) -> AncestryResult:
+    """Check ancestry, distinguishing a legitimate False from a read error.
+
+    merge-base --is-ancestor: 0 = ancestor, 1 = not ancestor,
+    128 = invalid/unresolvable rev, other = execution error.
+    """
     result = git.run(
         ["merge-base", "--is-ancestor", "--end-of-options", ancestor, descendant],
         check=False,
     )
-    return result.ok
+    if result.returncode == 0:
+        return AncestryResult(result=True)
+    if result.returncode == 1:
+        return AncestryResult(result=False)
+    return AncestryResult(result=None, error=result.error_text or "ancestry check failed")
 
 
 def read_diff(
@@ -408,14 +462,15 @@ def read_diff(
     target: str | None = None,
     paths: list[str] | None = None,
     max_lines: int = 500,
-) -> dict:
+) -> DiffInfo:
     """Read diff with bounded output.
 
-    Returns a dict with the diff text and truncation indicator.
+    Returns the diff text with a truncation indicator; error is set on failure.
     """
-    args = ["diff", "--no-color", "--end-of-options"]
+    args = ["diff", "--no-color"]
     if cached:
         args.append("--cached")
+    args.append("--end-of-options")
     if base and target:
         args.append(f"{base}...{target}")
     elif base:
@@ -426,20 +481,15 @@ def read_diff(
 
     result = git.run(args, check=False)
     if not result.ok:
-        return {
-            "error": result.error_text,
-            "diff": "",
-            "truncated": False,
-            "total_lines": 0,
-        }
+        return DiffInfo(error=result.error_text)
 
     lines = result.lines()
     truncated = len(lines) > max_lines
     if truncated:
         lines = lines[:max_lines]
 
-    return {
-        "diff": "\n".join(lines),
-        "truncated": truncated,
-        "total_lines": len(result.lines()),
-    }
+    return DiffInfo(
+        diff="\n".join(lines),
+        truncated=truncated,
+        total_lines=len(result.lines()),
+    )

@@ -291,6 +291,42 @@ class TestServer:
         assert data["commit"]["object_type"] == "commit"
 
     @pytest.mark.asyncio()
+    async def test_read_commits_object_kinds(self, repo: Path):
+        """非 commit 对象返回其真实类型；无法解析的 revision 返回错误。"""
+        mcp = self._make_server(repo)
+        # HEAD^{tree} 存在但非 commit → 报告真实类型
+        data = await self._call(mcp, "git_read_commits", {"revision": "HEAD^{tree}"})
+        assert data["commit"] is None
+        assert data["object_type"] == "tree"
+        # 无法解析的 revision → 报错
+        data = await self._call(mcp, "git_read_commits", {"revision": "nonexistent-ref-xyz"})
+        assert data["commit"] is None
+        assert "error" in data
+
+    @pytest.mark.asyncio()
+    async def test_read_commits_ancestry(self, repo: Path):
+        """ancestry 真/假都可判定；无法解析的 revision 报错而非判为假。"""
+        mcp = self._make_server(repo)
+        run_git(["checkout", "-q", "-b", "anc-test"], repo)
+        (repo / "anc.txt").write_text("a\n")
+        run_git(["add", "anc.txt"], repo)
+        run_git(["commit", "-qm", "anc"], repo)
+        c1 = run_git(["rev-parse", "HEAD"], repo).stdout.strip()
+        (repo / "anc.txt").write_text("b\n")
+        run_git(["commit", "-qam", "anc2"], repo)
+        c2 = run_git(["rev-parse", "HEAD"], repo).stdout.strip()
+
+        # c1 是 c2 的祖先；c2 不是 c1 的祖先
+        data = await self._call(mcp, "git_read_commits", {"ancestor": c1, "descendant": c2})
+        assert data["is_ancestor"] is True
+        data = await self._call(mcp, "git_read_commits", {"ancestor": c2, "descendant": c1})
+        assert data["is_ancestor"] is False
+        # 无法解析的 revision → 报错而非判为假
+        data = await self._call(mcp, "git_read_commits", {"ancestor": "bad-rev", "descendant": c1})
+        assert data["is_ancestor"] is None
+        assert "ancestry_error" in data
+
+    @pytest.mark.asyncio()
     async def test_read_diff_bounded(self, repo: Path):
         mcp = self._make_server(repo)
         # Create a large diff
@@ -300,6 +336,18 @@ class TestServer:
         data = await self._call(mcp, "git_read_diff", {"max_lines": 10})
         assert data["truncated"] is True
         assert data["total_lines"] > 10
+
+    @pytest.mark.asyncio()
+    async def test_read_diff_cached(self, repo: Path):
+        """cached diff 只包含已暂存的改动，不含工作区未暂存的改动。"""
+        mcp = self._make_server(repo)
+        (repo / "file.txt").write_text("staged change\n")
+        run_git(["add", "file.txt"], repo)
+        (repo / "file.txt").write_text("staged change\nunstaged\n")  # 工作区再改
+
+        data = await self._call(mcp, "git_read_diff", {"cached": True})
+        assert "+staged change" in data["diff"]
+        assert "+unstaged" not in data["diff"]
 
     @pytest.mark.asyncio()
     async def test_merge_ignored_file_overwritten(self, repo: Path, git: GitRunner):
@@ -331,15 +379,15 @@ class TestServer:
         assert (repo / "collision.txt").read_text() == "from branch\n"
 
     @pytest.mark.asyncio()
-    async def test_option_injection_rejected(self, repo: Path):
-        """Revisions starting with '-' are rejected by Git's --end-of-options."""
+    async def test_diff_base_is_treated_as_revision_not_option(self, repo: Path, tmp_path: Path):
+        """base 以 '-' 开头时被当作 revision 解析并报错，不被当作 git option 执行。"""
         mcp = self._make_server(repo)
-        # Try to inject --output option via base parameter
+        target = tmp_path / "evil.txt"
         data = await self._call(
-            mcp, "git_read_diff", {"base": "--output=/tmp/evil.txt"}
+            mcp, "git_read_diff", {"base": f"--output={target}"}
         )
         assert "error" in data
-        # Git should reject this as invalid option/revision
+        assert not target.exists()
 
     @pytest.mark.asyncio()
     async def test_both_added_conflict(self, repo: Path, git: GitRunner):

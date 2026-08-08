@@ -73,6 +73,26 @@ def _entry_to_dict(e) -> dict[str, Any]:
     }
 
 
+def _commit_to_dict(c) -> dict[str, Any]:
+    return {
+        "object_id": c.object_id,
+        "object_type": c.object_type,
+        "parents": c.parents,
+        "tree": c.tree,
+    }
+
+
+def _diff_to_dict(d) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "diff": d.diff,
+        "truncated": d.truncated,
+        "total_lines": d.total_lines,
+    }
+    if d.error:
+        result["error"] = d.error
+    return result
+
+
 def _status_to_dict(status) -> dict[str, Any]:
     return {
         "staged": [_entry_to_dict(e) for e in status.staged],
@@ -165,7 +185,7 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
         paths: list[str] | None = None,
         max_lines: int = 500,
     ) -> dict[str, Any]:
-        return git_facts.read_diff(
+        diff = git_facts.read_diff(
             git,
             cached=cached,
             base=base or None,
@@ -173,6 +193,7 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
             paths=paths or None,
             max_lines=max_lines,
         )
+        return _diff_to_dict(diff)
 
     @mcp.tool(
         description="Read commit facts: existence, type, parents. "
@@ -186,19 +207,18 @@ def _register_read_tools(mcp: MCPServer, git) -> None:
     ) -> dict[str, Any]:
         result: dict[str, Any] = {}
         if revision:
-            commit = git_facts.read_commit(git, revision)
-            if commit:
-                result["commit"] = {
-                    "object_id": commit.object_id,
-                    "object_type": commit.object_type,
-                    "parents": commit.parents,
-                    "tree": commit.tree,
-                }
-            else:
-                result["commit"] = None
-                result["error"] = f"not a commit or does not exist: {revision}"
+            probe = git_facts.probe_commit(git, revision)
+            result["commit"] = _commit_to_dict(probe.commit) if probe.commit else None
+            if probe.error:
+                result["error"] = probe.error
+            elif probe.object_type:
+                # Object exists but is not a commit — legitimate absent.
+                result["object_type"] = probe.object_type
         if ancestor and descendant:
-            result["is_ancestor"] = git_facts.is_ancestor(git, ancestor, descendant)
+            anc = git_facts.check_ancestor(git, ancestor, descendant)
+            result["is_ancestor"] = anc.result
+            if anc.error:
+                result["ancestry_error"] = anc.error
         return result
 
 

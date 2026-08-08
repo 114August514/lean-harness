@@ -15,7 +15,7 @@ from typing import Any
 from .git_exec import GitRunner
 from .git_facts import (
     OperationState,
-    is_ancestor,
+    check_ancestor,
     read_head,
     read_status,
     read_worktrees,
@@ -90,7 +90,10 @@ def branch_delete(
                 return {"error": f"retained ref not found: {rr}"}
             rr_oid = rr_resolved.text.strip()
             pinned_retained.append((rr, rr_oid))
-            if not is_ancestor(git, current_tip, rr_oid):
+            anc = check_ancestor(git, current_tip, rr_oid)
+            if anc.error:
+                return {"error": f"ancestry check failed: {anc.error}"}
+            if anc.result is not True:
                 unreachable_from.append(rr)
         if unreachable_from:
             return {

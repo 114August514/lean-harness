@@ -11,8 +11,8 @@ from git_mcp.git_exec import GitRunner
 from git_mcp.git_facts import (
     HeadState,
     OperationState,
-    is_ancestor,
-    read_commit,
+    check_ancestor,
+    probe_commit,
     read_head,
     read_repository,
     read_status,
@@ -128,15 +128,22 @@ class TestWorktrees:
 
 
 class TestCommits:
-    def test_read_head_commit(self, git: GitRunner):
-        commit = read_commit(git, "HEAD")
-        assert commit is not None
-        assert commit.object_type == "commit"
-        assert len(commit.parents) == 0  # initial commit
+    def test_probe_object_kinds(self, git: GitRunner):
+        # 存在的 commit → 返回 commit
+        probe = probe_commit(git, "HEAD")
+        assert probe.commit is not None
+        assert probe.commit.object_type == "commit"
+        assert len(probe.commit.parents) == 0  # initial commit
 
-    def test_nonexistent(self, git: GitRunner):
-        commit = read_commit(git, "0000000000000000000000000000000000000000")
-        assert commit is None
+        # 存在但非 commit 的对象 → 报告真实类型
+        probe = probe_commit(git, "HEAD^{tree}")
+        assert probe.commit is None
+        assert probe.object_type == "tree"
+
+        # 无法解析的 revision → 报错
+        probe = probe_commit(git, "0000000000000000000000000000000000000000")
+        assert probe.commit is None
+        assert probe.error is not None
 
     def test_ancestry(self, git: GitRunner, repo: Path):
         first = git.run_text(["rev-parse", "HEAD"])
@@ -145,5 +152,10 @@ class TestCommits:
         run_git(["commit", "-m", "second"], repo)
         second = git.run_text(["rev-parse", "HEAD"])
 
-        assert is_ancestor(git, first, second)
-        assert not is_ancestor(git, second, first)
+        assert check_ancestor(git, first, second).result is True
+        assert check_ancestor(git, second, first).result is False
+
+        # 无法解析的 revision → 报错而非判为假
+        anc = check_ancestor(git, "nonexistent-rev", "HEAD")
+        assert anc.result is None
+        assert anc.error is not None
