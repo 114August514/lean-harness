@@ -7,16 +7,16 @@
 当前 dogfooding 预发布版本使用：
 
 ```text
-v0.1.0-dogfood.2
+v0.1.0-dogfood
 ```
 
-每个版本安装到独立目录：
+先从 [GitHub Release](https://github.com/114August514/lean-harness/releases/tag/v0.1.0-dogfood) notes 的 `Release commit` 复制完整 40 位 commit ID，并设置环境变量 `HARNESS_COMMIT`。每个版本安装到独立目录：
 
 ```bash
 set -eu
 
-HARNESS_VERSION=v0.1.0-dogfood.2
-HARNESS_COMMIT=b48a7a1dffc6f3f12e7264831913faf5e207c4ed
+: "${HARNESS_COMMIT:?set HARNESS_COMMIT from GitHub Release notes}"
+HARNESS_VERSION=v0.1.0-dogfood
 HARNESS_ROOT="$HOME/.local/share/lean-harness/$HARNESS_VERSION"
 
 git clone --depth 1 \
@@ -27,7 +27,7 @@ git clone --depth 1 \
 test "$(git -C "$HARNESS_ROOT" rev-parse HEAD)" = "$HARNESS_COMMIT"
 ```
 
-目录名和 tag 用于版本导航，完整 commit ID 才是安装身份；校验失败时不得使用该目录。项目不引用 `main`，也不使用可变的 `current` 路径。升级时安装新版本并修改项目 binding；旧版本可以并存。
+目录名和 tag 用于版本导航，GitHub Release notes 中记录的完整 commit ID 才是安装身份；校验失败时不得使用该目录。release 内的本文始终指向自身 tag，commit ID 在 tag 创建后记录到 Release notes，避免用后续 commit 修补当前 release。项目不引用 `main`，也不使用可变的 `current` 路径。
 
 ## Release 中的消费边界
 
@@ -64,11 +64,11 @@ my-project/
 ```yaml
 skills:
   customDirectories:
-    - ~/.local/share/lean-harness/v0.1.0-dogfood.2/skills
+    - ~/.local/share/lean-harness/v0.1.0-dogfood/skills
 
 workspace:
   additionalDirectories:
-    - ~/.local/share/lean-harness/v0.1.0-dogfood.2
+    - ~/.local/share/lean-harness/v0.1.0-dogfood
 
 memory:
   backend: off
@@ -93,9 +93,9 @@ OMP 原生展开 `~`，直接加载 release 中的 Skills，并允许 Agent 读�
 ```markdown
 # 项目上下文
 
-Lean Harness release root：`~/.local/share/lean-harness/v0.1.0-dogfood.2`。
+Lean Harness release root：`~/.local/share/lean-harness/v0.1.0-dogfood`。
 
-@~/.local/share/lean-harness/v0.1.0-dogfood.2/.omp/AGENTS.md
+@~/.local/share/lean-harness/v0.1.0-dogfood/.omp/AGENTS.md
 
 ## 本项目
 
