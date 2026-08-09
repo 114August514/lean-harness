@@ -187,4 +187,4 @@ worker 不直接写 Project 工作日志的长期分区；候选事件交回主 
 - 委派在整个闭环中的位置：`skills/_shared/work-lifecycle.md`
 - 连续性相关字段的语义：`continuity/contract.md` 的
   “Skills、完成检查与 Git 最小不变量”
-- mutable worktree writer、branch writer 与安全清理语义：`git/contract.md`
+- mutable worktree writer、branch writer 与安全清理语义：`substrates/git/contract.md`

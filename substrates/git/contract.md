@@ -15,8 +15,8 @@ recovery engine 或 workflow state machine。
 | --- | --- |
 | branch、commit、merge、push、worktree 和 cleanup 流程 | 本文件 |
 | command、ref、object、index、merge、rebase、worktree 的 mechanics | 原生 Git |
-| destructive authorization、未知本地内容是否允许丢弃 | [`policy/decision-boundaries.md`](../policy/decision-boundaries.md) |
-| checkpoint、Recovery、handoff 与 resume | [`continuity/contract.md`](../continuity/contract.md) |
+| destructive authorization、未知本地内容是否允许丢弃 | [`policy/decision-boundaries.md`](../../policy/decision-boundaries.md) |
+| checkpoint、Recovery、handoff 与 resume | [`continuity/contract.md`](../../continuity/contract.md) |
 | Issue、PR、Review、Checks 和 provider merge | GitHub provider capability |
 
 ## 执行边界

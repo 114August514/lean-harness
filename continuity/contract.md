@@ -458,7 +458,7 @@ Skills 判断哪些事实重要、checkpoint 是否完整、Evidence 是否支�
 - Shared Work Log 不属于任何 branch。
 
 Git usage、worktree、ref 和 cleanup mechanics 以
-[`git/contract.md`](../git/contract.md) 为准；checkpoint、remap、Recovery、handoff 和
+[`substrates/git/contract.md`](../substrates/git/contract.md) 为准；checkpoint、remap、Recovery、handoff 和
 resume 语义由本契约定义。本节只保留 Continuity 直接依赖的最小连接点，不重复展开
 Git mechanics。
 

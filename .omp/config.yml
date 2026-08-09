@@ -1,0 +1,16 @@
+skills:
+  customDirectories:
+    - skills
+
+memory:
+  backend: off
+
+autolearn:
+  enabled: false
+
+task:
+  isolation:
+    mode: none
+
+github:
+  enabled: false

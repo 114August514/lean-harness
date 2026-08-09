@@ -210,4 +210,4 @@ HANDOFF  + 最小 HANDOFF 内容（见上）
 - `skills/_shared/delegation-contract.md` — remediation 委派的格式基础；
 - `continuity/contract.md` — 完成阶段的连续性检查
   （“Skills、完成检查与 Git 最小不变量”）；
-- `git/contract.md` — dirty worktree、commit reachability 与安全清理的机械不变量。
+- `substrates/git/contract.md` — dirty worktree、commit reachability 与安全清理的机械不变量。
