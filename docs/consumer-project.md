@@ -13,16 +13,21 @@ v0.1.0-dogfood.1
 每个版本安装到独立目录：
 
 ```bash
+set -eu
+
 HARNESS_VERSION=v0.1.0-dogfood.1
+HARNESS_COMMIT=e5ea46cae94ad452de7d2a541785c75a20b4b2c7
 HARNESS_ROOT="$HOME/.local/share/lean-harness/$HARNESS_VERSION"
 
 git clone --depth 1 \
   --branch "$HARNESS_VERSION" \
   https://github.com/114August514/lean-harness.git \
   "$HARNESS_ROOT"
+
+test "$(git -C "$HARNESS_ROOT" rev-parse HEAD)" = "$HARNESS_COMMIT"
 ```
 
-项目应引用明确版本，不引用 `main`，也不使用可变的 `current` 路径。升级时安装新版本并修改项目 binding；旧版本可以并存。
+目录名和 tag 用于版本导航，完整 commit ID 才是安装身份；校验失败时不得使用该目录。项目不引用 `main`，也不使用可变的 `current` 路径。升级时安装新版本并修改项目 binding；旧版本可以并存。
 
 ## Release 中的消费边界
 
@@ -134,15 +139,15 @@ Continuity 从固定 release 运行，但 `--repo` 指向目标项目：
 ```bash
 PROJECT_ROOT="$PWD"
 
-uv --directory "$HARNESS_ROOT" run python -m continuity \
+uv --directory "$HARNESS_ROOT/continuity" run python -m continuity \
   --repo "$PROJECT_ROOT" recovery status
 
-uv --directory "$HARNESS_ROOT" run python -m continuity \
+uv --directory "$HARNESS_ROOT/continuity" run python -m continuity \
   --repo "$PROJECT_ROOT" recovery bind \
   --work issue-1 --cycle cycle-1
 ```
 
-共享事件仍发布到目标项目自己的 GitHub Issue；Recovery Log 写入目标项目的 Git common dir。
+共享事件仍发布到目标项目自己的 GitHub Issue；Recovery Log 写入目标项目的 Git common dir。Continuity 的固定 work-state port 只处理 canonical work-event 和最小恢复 facts；Agent 发起的普通 GitHub 操作仍统一使用项目 `.omp/mcp.json` 中的官方 GitHub MCP。
 
 ## 明确不做
 

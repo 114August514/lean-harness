@@ -23,12 +23,13 @@ Lean Harness
 | --- | --- | --- |
 | Policy | [`policy/`](policy/index.md) | 权限、风险、破坏性操作边界和完成语义 |
 | Skills | [`skills/`](skills/) | 实现、调查、调试、验证、评审和收尾方法 |
-| Continuity | [`continuity/`](continuity/index.md) | 持久事实、检查点、恢复、交接和继续工作 |
+| Continuity | [`continuity/`](continuity/index.md) | 持久事实、检查点、恢复、交接和继续工作；共享事件使用固定的 GitHub Issue work-state port |
 | OMP 接入 | [`.omp/`](.omp/README.md) | OMP 原生项目配置和入口导航 |
 | Git 使用契约 | [`substrates/git/`](substrates/git/index.md) | 规定 Harness 如何使用 Git；命令由原生 Git 执行 |
-| GitHub Provider | [`.omp/mcp.json`](.omp/mcp.json) | 通过官方 GitHub MCP 处理 Issue、PR、Review、Checks 和托管合并 |
+| GitHub Provider | [`.omp/mcp.json`](.omp/mcp.json) | Agent 通过官方 GitHub MCP 处理 Issue、PR、Review、Checks、普通评论和托管合并 |
 
-GitHub Provider 在逻辑上属于外部能力，`mcp.json` 在物理上属于 OMP 运行时配置。仓库没有自有的 GitHub 规格，因此不建立 `substrates/github/`。
+GitHub Provider 在逻辑上属于外部能力，`mcp.json` 在物理上属于 OMP 运行时配置。官方 GitHub MCP 是唯一 Agent-facing GitHub 操作面，仓库没有自有的通用 GitHub 规格，因此不建立 `substrates/github/`。
+Continuity 内部的 `GitHubWorkState` 只实现 canonical work-event 的 append/list/find 和恢复所需的最小 Issue/PR facts；它不向 Agent 暴露任意 GitHub 请求、普通评论或 hosted mutation，因此不是第二个等价 Provider surface。
 
 本仓库不提供通用 Runtime Adapter、Provider Registry、Git wrapper，也不复制 Policy、Skills 或 Continuity。OMP 会话和上下文压缩不能替代 Continuity。
 
@@ -37,7 +38,7 @@ GitHub Provider 在逻辑上属于外部能力，`mcp.json` 在物理上属于 O
 准备环境：
 
 - OMP `17.2.11`，这是当前已验证版本；
-- 安装 `gh` 并运行 `gh auth login`，供 GitHub MCP 和 Continuity 使用；
+- 安装 `gh` 并运行 `gh auth login`，供 GitHub MCP 的运行时凭据和 Continuity 的窄 work-state transport 使用；
 - GitHub token 具有目标仓库所需权限。
 
 在仓库根目录运行：

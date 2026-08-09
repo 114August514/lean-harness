@@ -167,8 +167,8 @@ def _check_summary(checks: Any) -> dict[str, Any]:
     }
 
 
-class GitHubAdapter:
-    """One adapter implementing two narrow ports without merging their domains."""
+class GitHubWorkState:
+    """GitHub-backed work state for Continuity's two fixed domain ports."""
 
     def __init__(
         self,

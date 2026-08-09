@@ -10,7 +10,7 @@
 4. 需要检查点、交接、恢复或继续工作时，阅读 Harness root 中的 `continuity/index.md`。
 5. 修改 Git 状态前阅读 Harness root 中的 `substrates/git/index.md`，并通过 Bash 调用目标项目的原生 Git。
 
-Issue、PR、Review、Checks、评论和托管合并统一使用消费项目 `.omp/mcp.json` 配置的官方 GitHub MCP。它不负责本地 Git 操作。
+Agent 发起的 Issue、PR、Review、Checks、普通评论和托管合并统一使用消费项目 `.omp/mcp.json` 配置的官方 GitHub MCP。Continuity 命令可以通过自身固定的 work-state port 读写结构化事件和最小恢复 facts；不得把该 port 当作普通 GitHub 操作入口。GitHub MCP 和 Continuity 都不负责本地 Git 操作。
 
 OMP 会话和上下文压缩只是临时上下文，不能替代 Continuity。OMP task isolation 已关闭，因为它的隐式 Git 操作不是 Harness 的标准流程；在获得真实 dogfooding 证据前，子任务优先用于调查和评审。
 

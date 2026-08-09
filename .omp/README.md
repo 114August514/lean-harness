@@ -22,7 +22,7 @@
 | 子任务 | OMP 隔离模式会隐式创建 workspace、branch、commit、stash、cherry-pick 或 patch | 关闭 task isolation；第一版只优先使用调查和评审类子任务 |
 | Hook 与限制 | OMP 支持 Hook 和工具审批，但 Bash interception 不是完整安全边界 | 没有真实缺口前不增加拦截框架 |
 | 原生 GitHub tool | 支持读取、搜索、PR create / checkout / push 和 Actions watch | 能力可用，但缺少完整的评论、Review 提交和托管合并操作 |
-| MCP | 原生读取 `.omp/mcp.json`，支持 HTTP 和运行时解析凭据 | 使用官方托管 GitHub MCP 作为唯一 GitHub 操作面 |
+| MCP | 原生读取 `.omp/mcp.json`，支持 HTTP 和运行时解析凭据 | 使用官方托管 GitHub MCP 作为唯一 Agent-facing GitHub 操作面 |
 | 交互入口 | `omp` 启动 TUI，`omp -p` 启动新的非交互会话 | 直接使用 OMP 原生入口 |
 
 这些事实已经足够决定当前实现，因此没有继续比较第二个 Runtime，也没有设计通用 Runtime 或 Provider 抽象。
@@ -39,9 +39,20 @@
 
 当前保留 `gh auth token` binding。实际验证中，OMP `17.2.11` 对托管 GitHub MCP 执行 `/mcp reauth github` 时，生成的 GitHub authorization URL 没有 `client_id`，浏览器返回 404。GitHub 托管 MCP 要求 Host 自己配置 OAuth App；OMP 当前没有为该 endpoint 提供可直接使用的 GitHub OAuth client。
 
-可选方案需要注册自有 OAuth App，或改用带内置 OAuth App 的本地 stdio server，都会增加新的凭据配置或本地 Runtime 依赖。当前 workstation 已使用 `gh`，Continuity 的 GitHub adapter 也依赖它，因此复用 `gh` credential 是证据支持下复杂度最低的路径。
+可选方案需要注册自有 OAuth App，或改用带内置 OAuth App 的本地 stdio server，都会增加新的凭据配置或本地 Runtime 依赖。当前 workstation 已使用 `gh`，Continuity 的窄 `GitHubWorkState` transport 也只从它取得现有凭据，因此复用 `gh` credential 是证据支持下复杂度最低的路径。
 
 这意味着 GitHub credential 由当前 `gh` active account 持有，而不是按 OMP profile 隔离。切换账号时先显式执行 `gh auth switch` 并用 `gh auth status` 确认；项目配置不会保存 token。
+
+### Continuity work-state transport
+
+官方 GitHub MCP 统一承担 Agent 发起的 Issue、PR、Review、Checks、普通评论和 hosted merge。Continuity 不经 Agent tool surface 发布自己的 canonical work-event；其 `GitHubWorkState` 是 Core 内部的固定 domain port，只允许：
+
+```text
+append/list/find canonical work-event comments
+read minimal Issue/PR/check facts for recovery
+```
+
+该 port 不接受任意 endpoint、普通评论内容或 hosted mutation，也不能被 Agent 当作第二套 GitHub 工具使用。它保留独立于 OMP session 的 CLI transport，是为了让 durable state 在 fresh session 和其他 Runtime 中仍可恢复；若未来需要扩大其 GitHub 能力，必须重新评估与默认 Provider surface 的重叠。
 
 ## 状态边界
 

@@ -11,7 +11,7 @@ from typing import Any
 from .artifacts import head_commit
 from .context import ContextReconstructor
 from .errors import ContinuityError
-from .github import GitHubAdapter
+from .github import GitHubWorkState
 from .recovery import RecoveryLog, rotate_recovery
 from .worklog import WorkEventPublisher, WorkEventReader
 
@@ -43,8 +43,8 @@ def _emit(value: Any) -> None:
 def _shared_runtime(
     args: argparse.Namespace,
     repo: Path,
-) -> tuple[GitHubAdapter, WorkEventReader]:
-    shared = GitHubAdapter(repo, repository=args.repository)
+) -> tuple[GitHubWorkState, WorkEventReader]:
+    shared = GitHubWorkState(repo, repository=args.repository)
     return shared, WorkEventReader(repo, shared)
 
 
