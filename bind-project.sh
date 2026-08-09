@@ -31,20 +31,14 @@ if [ -n "$(git -C "$release_root" status --porcelain --untracked-files=all --ign
 fi
 
 escaped_root=$(printf '%s' "$release_root" | sed 's/\\/\\\\/g; s/"/\\"/g')
-if ! mkdir "$binding_dir" 2>/dev/null; then
-    printf 'error: %s was created concurrently; refusing to overwrite it\n' "$binding_dir" >&2
+temporary_dir="$project_root/.omp.lean-harness.$$"
+if ! mkdir "$temporary_dir" 2>/dev/null; then
+    printf 'error: cannot create temporary binding directory %s\n' "$temporary_dir" >&2
     exit 1
 fi
+trap 'rm -rf -- "$temporary_dir"' EXIT HUP INT TERM
 
-binding_complete=false
-cleanup_binding() {
-    if [ "$binding_complete" = false ]; then
-        rm -rf -- "$binding_dir"
-    fi
-}
-trap cleanup_binding EXIT HUP INT TERM
-
-cat >"$binding_dir/config.yml" <<EOF
+cat >"$temporary_dir/config.yml" <<EOF
 skills:
   customDirectories:
     - "$escaped_root/skills"
@@ -67,7 +61,7 @@ github:
   enabled: false
 EOF
 
-cat >"$binding_dir/AGENTS.md" <<EOF
+cat >"$temporary_dir/AGENTS.md" <<EOF
 # Project context
 
 Lean Harness release root: \`$release_root\`.
@@ -80,8 +74,16 @@ Lean Harness release: \`$release_tag\` at \`$release_commit\`.
 Read this project's README and existing repository documentation for project-specific context.
 EOF
 
-cp "$release_root/.omp/mcp.json" "$binding_dir/mcp.json"
-binding_complete=true
+cp "$release_root/.omp/mcp.json" "$temporary_dir/mcp.json"
+
+if ! mv -T -n -- "$temporary_dir" "$binding_dir"; then
+    printf 'error: cannot publish project binding at %s\n' "$binding_dir" >&2
+    exit 1
+fi
+if [ -e "$temporary_dir" ]; then
+    printf 'error: %s was created concurrently; refusing to overwrite it\n' "$binding_dir" >&2
+    exit 1
+fi
 trap - EXIT HUP INT TERM
 
 printf 'Bound Lean Harness %s (%s) to %s\n' "$release_tag" "$release_commit" "$project_root"
