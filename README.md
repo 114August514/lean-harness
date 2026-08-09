@@ -49,3 +49,7 @@ omp
 OMP 会读取 `.omp/config.yml` 和 `.omp/AGENTS.md`，直接加载现有 [`skills/`](skills/)，并连接官方 GitHub MCP。本地 branch、worktree、commit、merge 和 push 仍通过 Bash 调用原生 Git。
 
 接入依据和验证方法见 [`.omp/README.md`](.omp/README.md)。
+
+## 外部项目使用
+
+外部项目应安装一个固定的 Harness prerelease，并用少量 `.omp/` 文件直接引用它，不复制 Policy、Skills 或 Continuity。完整步骤见 [`docs/consumer-project.md`](docs/consumer-project.md)。

@@ -72,3 +72,7 @@ Dogfooding readiness 还要求两个场景：
 
 1. 新 OMP 会话读取 Issue，按 Harness 权威完成实现、验证、评审、PR 和 Checks 观察，并得到真实的最终状态；
 2. 丢弃旧对话后，新会话只依赖 Continuity、Git 和 GitHub 事实恢复当前工作，并给出下一项安全操作。
+
+## 外部项目
+
+固定版本安装、最薄 project binding 和 Continuity 调用方式见 [`../docs/consumer-project.md`](../docs/consumer-project.md)。
