@@ -11,7 +11,6 @@ worktree、提交、同步、冲突、清理、不确定结果和原生 Git 调�
 | Agent 调用 Git 时必须保持哪些事实和机械边界 | [contract.md](contract.md) |
 | destructive operation 是否获得授权 | [`policy/decision-boundaries.md`](../policy/decision-boundaries.md) |
 | checkpoint、Recovery、handoff 与 resume | [`continuity/contract.md`](../continuity/contract.md) |
-| 为什么当前不建设 Local Git MCP | [reuse-decision.md](reuse-decision.md) |
 | Git command-specific semantics | 原生 Git 文档与实际命令结果 |
 
 ## 常用入口
