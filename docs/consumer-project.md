@@ -35,9 +35,9 @@ omp
 
 `bind-project.sh` 会：
 
-1. 确认 Harness checkout 位于正式发布的 exact tag；
+1. 确认 Harness checkout 位于正式发布的 exact tag，且没有修改或新增内容；
 2. 自动读取 GitHub Release notes 中的完整 commit ID 并校验当前 checkout；
-3. 在目标项目中原子创建三个薄 binding 文件：
+3. 在目标项目中创建三个薄 binding 文件：
 
 ```text
 .omp/
