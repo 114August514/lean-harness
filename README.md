@@ -37,7 +37,7 @@ GitHub Provider 在逻辑上属于外部能力，`mcp.json` 在物理上属于 O
 准备环境：
 
 - OMP `17.2.11`，这是当前已验证版本；
-- 安装 `gh`，并运行 `gh auth login`；
+- 安装 `gh` 并运行 `gh auth login`，供 GitHub MCP 和 Continuity 使用；
 - GitHub token 具有目标仓库所需权限。
 
 在仓库根目录运行：

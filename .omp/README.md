@@ -31,19 +31,17 @@
 
 `.omp/mcp.json` 接入官方托管的 [GitHub MCP Server](https://github.com/github/github-mcp-server)。
 
-- Toolsets：`default,actions`，覆盖仓库、Issue、PR、Review、托管合并、Actions 和 Checks。
+- Tools：只开放 `get_me`、Issue 读取/搜索/评论、PR 读取/搜索/创建/更新/Review/托管合并，以及 Actions/Checks 读取。
 - 凭据：运行时通过 `gh auth token` 获取；仓库和 Continuity 中都不保存 token。
 - 本地 Git：branch、index、worktree、commit、merge 和 push 仍遵守 [`substrates/git/contract.md`](../substrates/git/contract.md)，由原生 Git 执行。
 
 `mcp.json` 放在 `.omp/`，因为它是 OMP 必须原生发现的运行时 binding。GitHub 能力本身由官方 MCP 持有，仓库没有自有的 GitHub contract，所以不建立 `substrates/github/`，也不维护配置副本。
 
-首次使用前运行：
+当前保留 `gh auth token` binding。实际验证中，OMP `17.2.11` 对托管 GitHub MCP 执行 `/mcp reauth github` 时，生成的 GitHub authorization URL 没有 `client_id`，浏览器返回 404。GitHub 托管 MCP 要求 Host 自己配置 OAuth App；OMP 当前没有为该 endpoint 提供可直接使用的 GitHub OAuth client。
 
-```bash
-gh auth login
-```
+可选方案需要注册自有 OAuth App，或改用带内置 OAuth App 的本地 stdio server，都会增加新的凭据配置或本地 Runtime 依赖。当前 workstation 已使用 `gh`，Continuity 的 GitHub adapter 也依赖它，因此复用 `gh` credential 是证据支持下复杂度最低的路径。
 
-其他 OMP profile 可以在仓库外使用自己的凭据策略；提交到仓库的配置始终不含凭据。
+这意味着 GitHub credential 由当前 `gh` active account 持有，而不是按 OMP profile 隔离。切换账号时先显式执行 `gh auth switch` 并用 `gh auth status` 确认；项目配置不会保存 token。
 
 ## 状态边界
 
