@@ -4,10 +4,10 @@
 
 ## 版本与安装
 
-首个预发布版本使用：
+当前 dogfooding 预发布版本使用：
 
 ```text
-v0.1.0-dogfood.1
+v0.1.0-dogfood.2
 ```
 
 每个版本安装到独立目录：
@@ -15,8 +15,8 @@ v0.1.0-dogfood.1
 ```bash
 set -eu
 
-HARNESS_VERSION=v0.1.0-dogfood.1
-HARNESS_COMMIT=e5ea46cae94ad452de7d2a541785c75a20b4b2c7
+HARNESS_VERSION=v0.1.0-dogfood.2
+HARNESS_COMMIT=b48a7a1dffc6f3f12e7264831913faf5e207c4ed
 HARNESS_ROOT="$HOME/.local/share/lean-harness/$HARNESS_VERSION"
 
 git clone --depth 1 \
@@ -64,11 +64,11 @@ my-project/
 ```yaml
 skills:
   customDirectories:
-    - ~/.local/share/lean-harness/v0.1.0-dogfood.1/skills
+    - ~/.local/share/lean-harness/v0.1.0-dogfood.2/skills
 
 workspace:
   additionalDirectories:
-    - ~/.local/share/lean-harness/v0.1.0-dogfood.1
+    - ~/.local/share/lean-harness/v0.1.0-dogfood.2
 
 memory:
   backend: off
@@ -93,9 +93,9 @@ OMP 原生展开 `~`，直接加载 release 中的 Skills，并允许 Agent 读�
 ```markdown
 # 项目上下文
 
-Lean Harness release root：`~/.local/share/lean-harness/v0.1.0-dogfood.1`。
+Lean Harness release root：`~/.local/share/lean-harness/v0.1.0-dogfood.2`。
 
-@~/.local/share/lean-harness/v0.1.0-dogfood.1/.omp/AGENTS.md
+@~/.local/share/lean-harness/v0.1.0-dogfood.2/.omp/AGENTS.md
 
 ## 本项目
 
