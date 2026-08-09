@@ -457,9 +457,10 @@ Skills 判断哪些事实重要、checkpoint 是否完整、Evidence 是否支�
 - Recovery Log 不进入 Git；
 - Shared Work Log 不属于任何 branch。
 
-完整 Git 工件语义、ownership、history rewrite 和安全清理规则以
-[`git/contract.md`](../git/contract.md) 为准；本节只保留 Continuity 直接依赖的
-最小连接点，不重复展开。
+Git usage、worktree、ref 和 cleanup mechanics 以
+[`git/contract.md`](../git/contract.md) 为准；checkpoint、remap、Recovery、handoff 和
+resume 语义由本契约定义。本节只保留 Continuity 直接依赖的最小连接点，不重复展开
+Git mechanics。
 
 ## 验收场景
 

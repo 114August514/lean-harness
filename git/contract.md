@@ -320,8 +320,14 @@ conflict、ref 已移动，接受 Git 原生拒绝；不要通过 `--force` 绕�
 
 ## Unsupported
 
-当前 Contract 没有定义的 Git 操作应停止并明确报告 `unsupported` 及请求内容。不要
-临时发明 workflow 或为理论边缘情况建立永久抽象。
+Contract 不枚举纯 read-only observation command。只读取事实且不更新 refs、index、
+working tree、worktree registration、remote 或 config 的 Git 原生能力可以按需使用，
+例如 `git log`、`git show`、`git rev-list`、`git cat-file` 和 `git diff-tree`；调用仍须
+遵守明确 `cwd`、credential 不外泄、option / operand 分隔和 no mutation 等通用边界。
+
+当前 Contract 没有定义的 state-changing、destructive 或 workflow-significant Git
+operation，应停止并明确报告 `unsupported` 及请求内容，先重新 align；不要临时发明
+workflow，也不要为理论边缘情况建立 command allowlist 或永久抽象。
 
 只有出现以下真实证据之一时，才重新评估专用 Git adapter：
 
