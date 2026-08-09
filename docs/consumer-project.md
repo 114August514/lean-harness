@@ -4,6 +4,7 @@
 
 ## 准备
 
+- 当前一键 binding 入口运行在 Linux，并依赖 GNU coreutils；
 - 已安装 OMP `17.2.11`；
 - 已安装 `git` 和 `gh`；
 - 首次使用 GitHub 时运行一次 `gh auth login`。
