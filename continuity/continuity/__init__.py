@@ -15,7 +15,7 @@ from .errors import (
     RecoveryError,
     SharedStoreError,
 )
-from .github import GitHubAdapter
+from .github import GitHubWorkState
 from .recovery import RecoveryLog, rotate_recovery
 from .worklog import SharedWorkLogStore, WorkEventPublisher, WorkEventReader
 
@@ -30,7 +30,7 @@ __all__ = [
     "EventIdentityConflict",
     "EventValidationError",
     "GitFactError",
-    "GitHubAdapter",
+    "GitHubWorkState",
     "ProjectFactsSource",
     "RecoveryError",
     "RecoveryLog",

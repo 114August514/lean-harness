@@ -8,7 +8,7 @@ import pytest
 from continuity.github import parse_comment, render_comment
 from continuity.worklog.events import prepare_event
 
-from continuity import EventValidationError, GitHubAdapter, SharedStoreError
+from continuity import EventValidationError, GitHubWorkState, SharedStoreError
 
 
 def _event(**overrides):
@@ -121,7 +121,7 @@ def test_github_store_lists_and_appends_structured_comments(repo, monkeypatch):
         return _completed(arguments, stdout=json.dumps(payload))
 
     monkeypatch.setattr(github_module.subprocess, "run", run)
-    store = GitHubAdapter(repo, repository="owner/repo")
+    store = GitHubWorkState(repo, repository="owner/repo")
 
     listed = store.list_events("issue-5")
     assert [event["event_id"] for event in listed] == [existing["event_id"]]
@@ -138,7 +138,7 @@ def test_github_store_rejects_created_comment_identity_conflict(repo, monkeypatc
         return _completed(arguments, stdout=json.dumps(_comment(observed)))
 
     monkeypatch.setattr(github_module.subprocess, "run", run)
-    store = GitHubAdapter(repo, repository="owner/repo")
+    store = GitHubWorkState(repo, repository="owner/repo")
 
     with pytest.raises(SharedStoreError, match="event identity conflict"):
         store.append_event("issue-5", _event())
@@ -154,7 +154,7 @@ def test_github_store_checks_partition_and_response_before_trusting_write(
         return _completed(arguments, stdout="[]")
 
     monkeypatch.setattr(github_module.subprocess, "run", run)
-    store = GitHubAdapter(repo, repository="owner/repo")
+    store = GitHubWorkState(repo, repository="owner/repo")
 
     with pytest.raises(SharedStoreError, match="does not match partition"):
         store.append_event("issue-5", _event(work="issue-9"))
@@ -208,7 +208,7 @@ def test_pull_request_facts_include_minimal_check_summary(repo, monkeypatch):
 
     monkeypatch.setattr(github_module, "current_branch", lambda repo: "main")
     monkeypatch.setattr(github_module.subprocess, "run", run)
-    store = GitHubAdapter(repo, repository="owner/repo")
+    store = GitHubWorkState(repo, repository="owner/repo")
 
     facts = store.get_current_pull_request()
 
@@ -247,7 +247,7 @@ def test_pull_request_facts_distinguish_absent_from_unavailable(
 
     monkeypatch.setattr(github_module, "current_branch", lambda repo: "main")
     monkeypatch.setattr(github_module.subprocess, "run", run)
-    store = GitHubAdapter(repo, repository="owner/repo")
+    store = GitHubWorkState(repo, repository="owner/repo")
 
     facts = store.get_current_pull_request()
     assert facts["availability"] == expected
@@ -277,6 +277,6 @@ def test_work_item_facts_expose_availability(repo, monkeypatch, failure, expecte
         return _completed(arguments, stderr=stderr, returncode=1)
 
     monkeypatch.setattr(github_module.subprocess, "run", run)
-    store = GitHubAdapter(repo, repository="owner/repo")
+    store = GitHubWorkState(repo, repository="owner/repo")
 
     assert store.get_work_item("issue-5")["availability"] == expected

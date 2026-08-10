@@ -242,6 +242,21 @@ marker、payload、partition 和 provider response，并只向领域层返回已
 不得把该 port 演化为 provider registry、transport framework、后台 daemon、独立
 数据库、Event Store 或 Event Bus。
 
+OMP 接入中的官方 GitHub MCP 是唯一 Agent-facing GitHub Provider。GitHub Issue
+shared store 是 Continuity Core 内部的固定 domain port，不向 Agent 暴露 GitHub
+命令或任意 request。当前 `GitHubWorkState` 只能：
+
+```text
+append/list/find canonical work-event comments
+read recovery 所需的最小 Issue / PR / check facts
+```
+
+它不得创建普通评论、修改 Issue / PR、提交 Review、触发 Checks 或执行 hosted merge，
+也不得增加 endpoint passthrough。Agent 发起的这些操作必须通过当前 Runtime 选择的
+GitHub Provider。该区分保持 Continuity durable authority 独立于 Runtime session，
+同时避免形成第二个等价 GitHub mutation surface；若 port 的能力需要扩大，必须重新
+评估 Provider authority collision。
+
 ### 身份、顺序与解决关系
 
 `event_id` 是稳定事件身份。多个协作者可以对同一 Issue 并发追加不同 event_id。
@@ -458,7 +473,7 @@ Skills 判断哪些事实重要、checkpoint 是否完整、Evidence 是否支�
 - Shared Work Log 不属于任何 branch。
 
 Git usage、worktree、ref 和 cleanup mechanics 以
-[`git/contract.md`](../git/contract.md) 为准；checkpoint、remap、Recovery、handoff 和
+[`substrates/git/contract.md`](../substrates/git/contract.md) 为准；checkpoint、remap、Recovery、handoff 和
 resume 语义由本契约定义。本节只保留 Continuity 直接依赖的最小连接点，不重复展开
 Git mechanics。
 

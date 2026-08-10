@@ -13,7 +13,7 @@
 Issue / Spec
 → 目标、范围、验收和正式决定
 Git
-→ 当前工件与提交历史；完整语义见 [`git/contract.md`](../git/contract.md)
+→ 当前工件与提交历史；完整语义见 [`substrates/git/contract.md`](../substrates/git/contract.md)
 Project-shared Work Log
 → 跨协作者的重要工作事件
 Local Recovery Log
@@ -58,7 +58,7 @@ PR
 - [contract.md](contract.md) 的 "Local Recovery Log"及其"Binding generation"；
 - [contract.md](contract.md) 的 "release / rebind / rotation 不变量"；
 - [contract.md](contract.md) 的 "Checkpoint、rotation 与历史改写"；
-- [`git/contract.md`](../git/contract.md) 的 worktree ownership 与安全清理规则。
+- [`substrates/git/contract.md`](../substrates/git/contract.md) 的 worktree ownership 与安全清理规则。
 
 ### 执行外部写操作
 
@@ -102,7 +102,7 @@ PR
 
 | 语义域 | 权威来源 |
 | --- | --- |
-| Git object、ref、index、working tree、worktree、identity、ancestry、reachability 与机械安全 | [`git/contract.md`](../git/contract.md) |
+| Git object、ref、index、working tree、worktree、identity、ancestry、reachability 与机械安全 | [`substrates/git/contract.md`](../substrates/git/contract.md) |
 | Recovery、Shared Work Log、checkpoint 声明、remap、rotation 与 resume | [contract.md](contract.md) |
 | 操作时机、工程意义、验证、Review 与完成判断 | Skills |
 

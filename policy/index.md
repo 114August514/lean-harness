@@ -55,7 +55,7 @@
 
 - `decision-boundaries.md` 的“本地破坏式状态操作”
 - `decision-boundaries.md` 的“未明确授权时禁止执行”
-- [`../git/contract.md`](../git/contract.md) 的“安全清理”和“Destructive operations”
+- [`../substrates/git/contract.md`](../substrates/git/contract.md) 的“安全清理”和“Destructive operations”
 
 不确定是否需要询问人类时，阅读：
 

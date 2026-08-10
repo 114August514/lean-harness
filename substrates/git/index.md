@@ -1,4 +1,4 @@
-# Git 使用索引
+# Git external substrate 使用索引
 
 [`contract.md`](contract.md) 是本仓库使用 Git 的权威规范，包含普通 branch 流程、并行
 worktree、提交、同步、冲突、清理、不确定结果和原生 Git 调用边界。
@@ -9,8 +9,8 @@ worktree、提交、同步、冲突、清理、不确定结果和原生 Git 调�
 | --- | --- |
 | 日常 branch、commit、merge、push、worktree 与 cleanup 怎么做 | [contract.md](contract.md) |
 | Agent 调用 Git 时必须保持哪些事实和机械边界 | [contract.md](contract.md) |
-| destructive operation 是否获得授权 | [`policy/decision-boundaries.md`](../policy/decision-boundaries.md) |
-| checkpoint、Recovery、handoff 与 resume | [`continuity/contract.md`](../continuity/contract.md) |
+| destructive operation 是否获得授权 | [`policy/decision-boundaries.md`](../../policy/decision-boundaries.md) |
+| checkpoint、Recovery、handoff 与 resume | [`continuity/contract.md`](../../continuity/contract.md) |
 | Git command-specific semantics | 原生 Git 文档与实际命令结果 |
 
 ## 常用入口
@@ -48,7 +48,7 @@ refs 或 worktree registration。
 ## 当前技术决定
 
 ```text
-Skills / git/contract.md
+Skills / substrates/git/contract.md
 → 决定 Git 意图和命令顺序
 
 Bash / native Git

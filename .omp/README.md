@@ -1,0 +1,89 @@
+# OMP 运行时接入
+
+本目录只包含 OMP 原生项目配置和导航，不是新的 Harness 运行时子系统。
+
+## 已验证版本
+
+- 日期：2026-08-09
+- 版本：`omp/17.2.11`
+- Revision：该发行版的 `omp --version` 不提供源码 revision
+- 入口：在仓库根目录运行 `omp`
+
+## 适配调查
+
+| 问题 | OMP 实际行为 | 当前决定 |
+| --- | --- | --- |
+| 项目配置 | 自动读取根目录 `.omp/config.yml`；项目配置覆盖全局配置，命令行参数可继续覆盖 | 只使用原生项目配置，不增加启动 wrapper |
+| 项目上下文 | 会话启动时注入最近的 `.omp/AGENTS.md` | `AGENTS.md` 只做导航，权威内容保留在原文件 |
+| Skills | `skills.customDirectories` 可直接扫描一层 `*/SKILL.md` | 直接加载仓库 `skills/`，不复制、不同步 |
+| 审批 | OMP 提供 read / write / exec 审批和逐工具策略 | 不复制 Policy，也不增加 OMP 专用审批框架 |
+| 上下文压缩 | 压缩 OMP 会话中的临时上下文 | 允许使用，但不能作为持久工作事实 |
+| Memory | OMP Memory 会形成第二份项目级持久信息 | 显式关闭 Memory 和 autolearn，由 Continuity 统一持有持久工作状态 |
+| 子任务 | OMP 隔离模式会隐式创建 workspace、branch、commit、stash、cherry-pick 或 patch | 关闭 task isolation；第一版只优先使用调查和评审类子任务 |
+| Hook 与限制 | OMP 支持 Hook 和工具审批，但 Bash interception 不是完整安全边界 | 没有真实缺口前不增加拦截框架 |
+| 原生 GitHub tool | 支持读取、搜索、PR create / checkout / push 和 Actions watch | 能力可用，但缺少完整的评论、Review 提交和托管合并操作 |
+| MCP | 原生读取 `.omp/mcp.json`，支持 HTTP 和运行时解析凭据 | 使用官方托管 GitHub MCP 作为唯一 Agent-facing GitHub 操作面 |
+| 交互入口 | `omp` 启动 TUI，`omp -p` 启动新的非交互会话 | 直接使用 OMP 原生入口 |
+
+这些事实已经足够决定当前实现，因此没有继续比较第二个 Runtime，也没有设计通用 Runtime 或 Provider 抽象。
+
+## GitHub Provider
+
+`.omp/mcp.json` 接入官方托管的 [GitHub MCP Server](https://github.com/github/github-mcp-server)。
+
+- Tools：只开放 `get_me`、Issue 读取/搜索/评论、PR 读取/搜索/创建/更新/Review/托管合并，以及 Actions/Checks 读取。
+- 凭据：运行时通过 `gh auth token` 获取；仓库和 Continuity 中都不保存 token。
+- 本地 Git：branch、index、worktree、commit、merge 和 push 仍遵守 [`substrates/git/contract.md`](../substrates/git/contract.md)，由原生 Git 执行。
+
+`mcp.json` 放在 `.omp/`，因为它是 OMP 必须原生发现的运行时 binding。GitHub 能力本身由官方 MCP 持有，仓库没有自有的 GitHub contract，所以不建立 `substrates/github/`，也不维护配置副本。
+
+当前保留 `gh auth token` binding。实际验证中，OMP `17.2.11` 对托管 GitHub MCP 执行 `/mcp reauth github` 时，生成的 GitHub authorization URL 没有 `client_id`，浏览器返回 404。GitHub 托管 MCP 要求 Host 自己配置 OAuth App；OMP 当前没有为该 endpoint 提供可直接使用的 GitHub OAuth client。
+
+可选方案需要注册自有 OAuth App，或改用带内置 OAuth App 的本地 stdio server，都会增加新的凭据配置或本地 Runtime 依赖。当前 workstation 已使用 `gh`，Continuity 的窄 `GitHubWorkState` transport 也只从它取得现有凭据，因此复用 `gh` credential 是证据支持下复杂度最低的路径。
+
+这意味着 GitHub credential 由当前 `gh` active account 持有，而不是按 OMP profile 隔离。切换账号时先显式执行 `gh auth switch` 并用 `gh auth status` 确认；项目配置不会保存 token。
+
+### Continuity work-state transport
+
+官方 GitHub MCP 统一承担 Agent 发起的 Issue、PR、Review、Checks、普通评论和 hosted merge。Continuity 不经 Agent tool surface 发布自己的 canonical work-event；其 `GitHubWorkState` 是 Core 内部的固定 domain port，只允许：
+
+```text
+append/list/find canonical work-event comments
+read minimal Issue/PR/check facts for recovery
+```
+
+该 port 不接受任意 endpoint、普通评论内容或 hosted mutation，也不能被 Agent 当作第二套 GitHub 工具使用。它保留独立于 OMP session 的 CLI transport，是为了让 durable state 在 fresh session 和其他 Runtime 中仍可恢复；若未来需要扩大其 GitHub 能力，必须重新评估与默认 Provider surface 的重叠。
+
+## 状态边界
+
+```text
+OMP session / compaction
+→ 运行时临时上下文
+
+continuity/
+→ Harness 持久工作状态
+```
+
+新的会话必须通过 Continuity、当前 Git 事实和当前 GitHub 事实恢复工作。恢复旧 OMP 会话只能作为便利，不能作为恢复证据。
+
+## 验证
+
+基础检查：
+
+```bash
+omp --version
+omp -p --no-session "说明 Lean Harness 的架构入口，并列出发现的 Harness Skills。不要修改文件。"
+uv run pytest -q
+uv run ruff check .
+uv run python -m compileall -q continuity
+uv run python -m continuity --help
+```
+
+Dogfooding readiness 还要求两个场景：
+
+1. 新 OMP 会话读取 Issue，按 Harness 权威完成实现、验证、评审、PR 和 Checks 观察，并得到真实的最终状态；
+2. 丢弃旧对话后，新会话只依赖 Continuity、Git 和 GitHub 事实恢复当前工作，并给出下一项安全操作。
+
+## 外部项目
+
+固定版本安装、最薄 project binding 和 Continuity 调用方式见 [`../docs/consumer-project.md`](../docs/consumer-project.md)。
