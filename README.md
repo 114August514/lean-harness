@@ -13,7 +13,8 @@ Lean Harness
 ├── 核心工程准则 (Policy)
 │   ├── always.md            # 三大横切底线：先搜再写 / 测试先行（先红后绿）/ 防手搓成熟基础设施
 │   ├── triage.md            # 双轨分流：日常快轨 0 审批自愈环 vs 结构慢轨 1 页契约
-│   └── ai-failure-modes.md  # AI 高频失败模式排查手册（假测试、吞异常、删断言等）
+│   ├── ai-failure-modes.md  # AI 高频失败模式排查手册（假测试、吞异常、删断言等）
+│   └── evolution.md         # 防污染自进化与知识沉淀协议（三层进化模型、2-Strike 门槛）
 ├── 软件开发阶段规范 (Workflow)
 │   └── workflow/lifecycle.md# 精益五阶段模型 (意图/契约/骨架/切片自愈/审计交付)
 ├── 自动化机械工具 (Tooling & Standard Verbs)
@@ -27,7 +28,8 @@ Lean Harness
 ├── 事实连续性与可逆性 (Continuity & Substrates)
 │   ├── continuity/          # Python 恢复引擎：per-worktree 恢复日志与状态重构
 │   └── substrates/git/      # 原生 Git 契约：Linked Worktree 安全隔离与原子回退
-└── 运行时接入与长程配方 (Runtime Recipes)
+└── 运行时接入与长程配方 (Runtime & Prompt Recipes)
+    ├── docs/prompt-recipes.md  # 黄金驱动 Prompt 体系（塑形、先调研后干活、通宵挂机）
     ├── docs/runtime-recipes.md # Antigravity /goal 与 OMP 长程无监督协同配方
     ├── .omp/                # 原生接入 OMP (Oh My Pi) 运行时
     └── .claude/ & CLAUDE.md # 原生接入 Claude Code 运行时

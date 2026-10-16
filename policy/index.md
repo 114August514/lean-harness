@@ -9,6 +9,7 @@
 - [核心横切规则](always.md)
 - [双轨分流策略](triage.md)
 - [AI失败模式清单](ai-failure-modes.md)
+- [防污染自进化协议](evolution.md)
 
 ## 核心原则
 
