@@ -1,56 +1,103 @@
 # Lean Harness
 
-Lean Harness 为 Coding Agent 提供可审计的工作规则和工程方法，并直接复用成熟的运行时与外部工具。
+**Lean Harness** 是一个专为 Coding Agent（如 OMP、Claude Code 等）打造的轻量工程外骨格（Harness）。
+
+它的设计原则是：**用静默的自动化护栏替代官僚式的过度审计，用客观的环境反馈（TDD/Linter/Diff）替代人肉盯梢，兼顾极速的开发流速与严谨的工程底线。**
+
+---
 
 ## 架构
 
 ```text
 Lean Harness
-├── 核心能力
-│   ├── Policy
-│   ├── Skills
-│   └── Continuity
-├── 运行时接入
-│   └── OMP
-└── 外部能力契约
-    ├── Git
-    └── GitHub Provider
+├── 核心工程准则 (Policy)
+│   ├── always.md            # 三大横切底线：先搜再写 / 测试先行（先红后绿）/ 防手搓成熟基础设施
+│   ├── triage.md            # 双轨分流：日常快轨 0 审批自愈环 vs 结构慢轨 1 页契约
+│   └── ai-failure-modes.md  # AI 高频失败模式排查手册（假测试、吞异常、删断言等）
+├── 软件开发阶段规范 (Workflow)
+│   └── workflow/lifecycle.md# 精益五阶段模型 (意图/契约/骨架/切片自愈/审计交付)
+├── 自动化机械工具 (Tooling & Standard Verbs)
+│   ├── make check           # 提交前一键门禁（fmt-check + lint + test）
+│   ├── make doctor          # 仓库工程基线与健康度自检
+│   ├── make audit           # Git Diff 高危信号与破坏性变更自动化扫描
+│   ├── bin/new-project      # 一键脚手架：快速初始化具备 Lean Harness 规格的新项目
+│   └── stack.mk             # 语言无关的标准动词适配器（Python/TS/Go/Rust）
+├── 责任与能力闭环 (Skills)
+│   └── skills/              # align / implement / verify / review / finish / debug
+├── 事实连续性与可逆性 (Continuity & Substrates)
+│   ├── continuity/          # Python 恢复引擎：per-worktree 恢复日志与状态重构
+│   └── substrates/git/      # 原生 Git 契约：Linked Worktree 安全隔离与原子回退
+└── 运行时接入与长程配方 (Runtime Recipes)
+    ├── docs/runtime-recipes.md # Antigravity /goal 与 OMP 长程无监督协同配方
+    ├── .omp/                # 原生接入 OMP (Oh My Pi) 运行时
+    └── .claude/ & CLAUDE.md # 原生接入 Claude Code 运行时
 ```
 
-逻辑架构描述责任边界，目录只承载仓库实际拥有的长期文件：
+---
 
-| 责任 | 位置 | 作用 |
-| --- | --- | --- |
-| Policy | [`policy/`](policy/index.md) | 权限、风险、破坏性操作边界和完成语义 |
-| Skills | [`skills/`](skills/) | 实现、调查、调试、验证、评审和收尾方法 |
-| Continuity | [`continuity/`](continuity/index.md) | 持久事实、检查点、恢复、交接和继续工作；共享事件使用固定的 GitHub Issue work-state port |
-| OMP 接入 | [`.omp/`](.omp/README.md) | OMP 原生项目配置和入口导航 |
-| Git 使用契约 | [`substrates/git/`](substrates/git/index.md) | 规定 Harness 如何使用 Git；命令由原生 Git 执行 |
-| GitHub Provider | [`.omp/mcp.json`](.omp/mcp.json) | Agent 通过官方 GitHub MCP 处理 Issue、PR、Review、Checks、普通评论和托管合并 |
+## 标准动词接口 (Standard Verbs)
 
-GitHub Provider 在逻辑上属于外部能力，`mcp.json` 在物理上属于 OMP 运行时配置。官方 GitHub MCP 是唯一 Agent-facing GitHub 操作面，仓库没有自有的通用 GitHub 规格，因此不建立 `substrates/github/`。
-Continuity 内部的 `GitHubWorkState` 只实现 canonical work-event 的 append/list/find 和恢复所需的最小 Issue/PR facts；它不向 Agent 暴露任意 GitHub 请求、普通评论或 hosted mutation，因此不是第二个等价 Provider surface。
+无论是人类还是 Agent，在任何项目中只需要记忆并遵循一套通用的动词：
 
-本仓库不提供通用 Runtime Adapter、Provider Registry、Git wrapper，也不复制 Policy、Skills 或 Continuity。OMP 会话和上下文压缩不能替代 Continuity。
+| 动词命令 | 作用 | 推荐执行时机 |
+| :--- | :--- | :--- |
+| `make check` | **[最核心命令]** 完整门禁（测试 + Lint + 格式检查） | Agent 宣称完成任务前**必跑** |
+| `make test` | 快速执行测试套件（含单元测试与工具链自检） | TDD 循环中频繁调用 |
+| `make dev` | 启动本地开发或测试热重载模式（曳光弹运行） | 本地开发调试时 |
+| `make seed` | 加载预置的具有真实业务语义的演示种子数据 | 演示或本地自测前 |
+| `make demo` | 一键装配种子数据并拉起产品交互演示（带 30 秒玩转指南） | 交付或功能试玩验收 |
+| `make doctor` | 检查仓库工程基线（Git、依赖、标准接口） | 接手新项目或环境排查时 |
+| `make audit` | 自动扫描 Git Diff，检查 Schema 变更、新增依赖与假测试 | PR 提交前或人类合并代码前 |
 
-## 使用 OMP
+> 详细实战流程指南请参阅 [使用 Lean Harness 进行全流程软件开发](docs/consumer-project.md)。
 
-准备环境：
+---
 
-- OMP `17.2.11`，这是当前已验证版本；
-- 安装 `gh` 并运行 `gh auth login`，供 GitHub MCP 的运行时凭据和 Continuity 的窄 work-state transport 使用；
-- GitHub token 具有目标仓库所需权限。
+## 核心工程原则
 
-在仓库根目录运行：
+1. **先搜再写**：写任何功能前，强制在代码库内搜索已有实现，严禁重复造轮子；加解密、时区计算、协议解析一律使用成熟库。
+2. **测试先行且亲眼见证变红（Fail-to-Pass）**：严禁写出“未曾失败过”的伪测试；改完代码自动跑 `make check`，报错则在沙箱内自主修复。
+3. **按可逆性决定投入（双轨制）**：
+   - **快轨 (80%)**：日常 Bug 修复与小功能，0 人工卡点，完全依赖测试与编译机器门禁；
+   - **慢轨 (20%)**：动数据库 Schema、破坏性 API 契约或权限模型时，前置编写 1 页以内的轻量 Spec 与回滚方案，确认一次即放行。
+
+---
+
+## 快速接入外部项目
+
+你可以使用 `bind-project.sh` 将 Lean Harness 的工程能力一键挂载到任意目标仓库：
 
 ```bash
-omp
+# 挂载到 OMP 运行时
+./bind-project.sh /path/to/your-project --runtime omp --dev
+
+# 挂载到 Claude Code 运行时（自动软链 Skills 并生成 CLAUDE.md）
+./bind-project.sh /path/to/your-project --runtime claude --dev
+
+# 同时支持双运行时
+./bind-project.sh /path/to/your-project --runtime all --dev
 ```
 
-OMP 会读取 `.omp/config.yml` 和 `.omp/AGENTS.md`，直接加载现有 [`skills/`](skills/)，并连接官方 GitHub MCP。本地 branch、worktree、commit、merge 和 push 仍通过 Bash 调用原生 Git。
+---
 
-接入依据和验证方法见 [`.omp/README.md`](.omp/README.md)。
+## 快速从 0 创建新项目 (Scaffold)
 
-## 外部项目使用
+使用 `bin/new-project` 可以在 5 秒内初始化一个具备标准动词、技术栈适配器与双运行时绑定的新项目：
 
-外部项目应安装一个固定的 Harness prerelease，并用少量 `.omp/` 文件直接引用它，不复制 Policy、Skills 或 Continuity。完整步骤见 [`docs/consumer-project.md`](docs/consumer-project.md)。
+```bash
+# 初始化一个 TypeScript (Bun) 项目并挂载双运行时
+./bin/new-project ~/Projects/my-app --stack ts-bun --runtime all
+
+# 初始化一个 Go 项目并挂载 OMP 运行时
+./bin/new-project ~/Projects/my-svc --stack go --runtime omp
+```
+
+---
+
+## 模板与适配器 (Templates & Adapters)
+
+在 `templates/` 目录下提供了语言无关的项目骨架与技术栈适配器：
+
+- `templates/project-skeleton/`：包含标准 `Makefile` 与极简 `spec.md` 需求模板（带 Non-goals）；
+- `templates/adapters/`：提供 `python-uv.mk`、`ts-bun.mk`、`go.mk`、`rust.mk`，填入 8 个变量即可让任何语言的项目接入统一的 `make check`。
+

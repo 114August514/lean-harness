@@ -40,17 +40,16 @@ description: 为关键 Claim 和 Acceptance criteria 选择并执行最低成本
    Claim 和风险决定：
 
    ```text
-   自动化测试（已有或新增）
+   标准自动化验证（make check: fmt-check / lint / typecheck / test）
+   变更风险机械扫描（make audit: 破坏性变更、依赖变动、删除断言排查）
+   自动化测试（针对新逻辑先红后绿的用例）
    命令执行与输出检查
-   构建、类型检查、lint
-   手工或脚本化操作验证
    测量与 benchmark 数据
    日志、监控、trace 观测
    文档与代码的交叉核对
    ```
 
-   不把 Evidence 等同于自动化测试，也不默认新增永久测试——是否保留
-   测试按 `policy/working-contract.md` 的"测试与验证"判断。
+   在具备 Makefile 的工程项目中，**优先且强制执行 `make check` 与 `make audit`**，由机器自动截断低级错误与潜在风险。不把 Evidence 等同于过度繁重的断言，也不把客观标准推给人工肉眼核验。验证前必须确认新测试曾真实失败过（遵循 `policy/always.md`）。
 
 3. **执行并记录。** 每条 Evidence 至少记录：
 

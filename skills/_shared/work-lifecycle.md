@@ -24,22 +24,20 @@ align when needed
 → finish
 ```
 
-| 环节 | 负责 Skill | 产物 |
-| --- | --- | --- |
-| align when needed | `align-work` | 语义对齐结果，或明确记录的自主决定 |
-| execute | `implement-change` / `debug-problem` / `investigate-question` | 可验证的候选结果 |
-| verify | `verify-work` | 每个关键 Claim 的 `PASS` / `FAIL` / `INSUFFICIENT` |
-| review | `review-work` | `PASS` / `FINDINGS` |
-| bounded remediation when needed | 由 `finish-work` 委派执行 worker | 修复后的工件 |
-| reverify affected claims | `verify-work` | 受影响 Claim 的新 Evidence |
-| targeted re-review when needed | `review-work` | `PASS` / `FINDINGS` |
-| finish | `finish-work` | `DONE` / `BLOCKED` / `HANDOFF` |
+| 环节 | 对应阶段 | 负责 Skill | 核心产物与命令 |
+| --- | --- | --- | --- |
+| align when needed | **Stage 1 & 2** (意图/契约) | `align-work` | 目标与非目标 (Non-goals)，或结构契约 |
+| execute | **Stage 4** (切片实现) | `implement-change` / `debug-problem` / `investigate-question` | 先红后绿的测试与生产代码 (Worktree 隔离) |
+| verify | **Stage 4** (自愈与检验) | `verify-work` | 执行 `make check`，输出每个 Claim 的 `PASS` / `FAIL` |
+| review | **Stage 5** (机械审计) | `review-work` | 运行 `make audit`，输出 `PASS` / `FINDINGS` |
+| bounded remediation | **Stage 4** (自主纠错) | 由 `finish-work` 委派执行 worker | 基于 Traceback 自主修复的工件 |
+| reverify | **Stage 4** (复验) | `verify-work` | 重新运行 `make check` |
+| targeted re-review | **Stage 5** (复核) | `review-work` | 仅复核受影响代码的 Git Diff |
+| finish | **Stage 5** (差量交付) | `finish-work` | `DONE` (合入并清理 Worktree) / `BLOCKED` |
 
 三个执行 Skill 是并列入口，按 work unit 的主类型选择其一。
 执行 Skill 形成候选结果后即交给 `finish-work`，不自行宣称完成。
-
-`align-work` 在三个时机按需出现：工作开始时、执行中发现实质语义分叉时、
-完成前需要人类验收时。它处理对齐，不启动完整闭环。
+详细五阶段设计与双轨分流见 `workflow/lifecycle.md`。
 
 ---
 

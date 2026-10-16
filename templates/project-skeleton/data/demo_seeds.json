@@ -1,0 +1,16 @@
+[
+  {
+    "id": "item-001",
+    "title": "示例数据条目 1",
+    "description": "这是为 Demo 演示预置的初始示例数据，开箱即用。",
+    "status": "active",
+    "tags": ["demo", "starter"]
+  },
+  {
+    "id": "item-002",
+    "title": "示例数据条目 2",
+    "description": "方便人类在首次敲下 make demo 时立刻体验搜索、过滤与展示。",
+    "status": "completed",
+    "tags": ["demo", "verified"]
+  }
+]

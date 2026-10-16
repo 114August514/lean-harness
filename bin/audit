@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$ROOT_DIR"
+
+BASE_REF="${1:-HEAD~1}"
+
+# If HEAD~1 does not exist (single commit repo), use empty tree
+if ! git rev-parse --verify "$BASE_REF" >/dev/null 2>&1; then
+    BASE_REF="$(git hash-object -t tree /dev/null)"
+fi
+
+echo "=== Lean Harness Automated Change Audit ==="
+echo "Comparing changes: $BASE_REF .. working tree"
+echo ""
+
+CRITICAL_FINDINGS=0
+WARNING_FINDINGS=0
+
+# 1. Inspect Changed Files
+CHANGED_FILES="$(git diff --name-only "$BASE_REF" 2>/dev/null || true)"
+UNTRACKED_FILES="$(git ls-files --others --exclude-standard 2>/dev/null || true)"
+ALL_TOUCHED="$(printf "%s\n%s" "$CHANGED_FILES" "$UNTRACKED_FILES" | sed '/^$/d' | sort -u)"
+
+if [ -z "$ALL_TOUCHED" ]; then
+    echo "No changes detected. Working tree clean against $BASE_REF."
+    exit 0
+fi
+
+echo "Touched files count: $(printf "%s\n" "$ALL_TOUCHED" | wc -l | tr -d ' ')"
+
+# 2. Check for Critical Boundary Changes (Contracts / Migrations / Permissions)
+echo ""
+echo "--- [1] Boundary & Contract Inspection ---"
+CONTRACT_CHANGES="$(printf "%s\n" "$ALL_TOUCHED" | grep -E '^(contracts/|migrations/|api/|schema/)' || true)"
+if [ -n "$CONTRACT_CHANGES" ]; then
+    echo "  [CRITICAL] Modifications in contracts/migrations detected:"
+    printf "%s\n" "$CONTRACT_CHANGES" | sed 's/^/    - /'
+    CRITICAL_FINDINGS=$((CRITICAL_FINDINGS + 1))
+else
+    echo "  [PASS] No database migrations or API contract modifications."
+fi
+
+# Check for Dependency Manifest Changes
+DEP_CHANGES="$(printf "%s\n" "$ALL_TOUCHED" | grep -E '(package\.json|pyproject\.toml|uv\.lock|Cargo\.toml|go\.mod|requirements.*\.txt)' || true)"
+if [ -n "$DEP_CHANGES" ]; then
+    echo "  [WARN] Dependency manifests touched (verify no unneeded packages):"
+    printf "%s\n" "$DEP_CHANGES" | sed 's/^/    - /'
+    WARNING_FINDINGS=$((WARNING_FINDINGS + 1))
+else
+    echo "  [PASS] No dependency manifests modified."
+fi
+
+# 3. Check for Secret Leaks or Sensitive Files
+echo ""
+echo "--- [2] Secret & Credential Guard ---"
+SECRET_FILES="$(printf "%s\n" "$ALL_TOUCHED" | grep -E '(\.env|\.pem|\.key|id_rsa|credentials\.json)' || true)"
+if [ -n "$SECRET_FILES" ]; then
+    echo "  [CRITICAL] Possible secret/key files included in changes:"
+    printf "%s\n" "$SECRET_FILES" | sed 's/^/    - /'
+    CRITICAL_FINDINGS=$((CRITICAL_FINDINGS + 1))
+else
+    echo "  [PASS] No obvious secret files added."
+fi
+
+# 4. Check for Test Integrity (Deleted assertions / Skips)
+echo ""
+echo "--- [3] Test Integrity & AI Pitfalls Guard ---"
+TEST_DIFF="$(git diff "$BASE_REF" -- "*test*" 2>/dev/null || true)"
+if [ -n "$TEST_DIFF" ]; then
+    # Check for removed assertions
+    REMOVED_ASSERTS="$(printf "%s\n" "$TEST_DIFF" | grep -E '^-.*assert' || true)"
+    if [ -n "$REMOVED_ASSERTS" ]; then
+        echo "  [WARN] Existing test assertions were deleted or relaxed in diff:"
+        printf "%s\n" "$REMOVED_ASSERTS" | head -n 5 | sed 's/^/    /'
+        WARNING_FINDINGS=$((WARNING_FINDINGS + 1))
+    fi
+
+    # Check for skipped tests added
+    SKIPPED_TESTS="$(printf "%s\n" "$TEST_DIFF" | grep -E '^\+.*(@pytest\.mark\.skip|skip\(|xit\(|@Ignore|\.skip)' || true)"
+    if [ -n "$SKIPPED_TESTS" ]; then
+        echo "  [WARN] Skipped tests detected in additions:"
+        printf "%s\n" "$SKIPPED_TESTS" | head -n 5 | sed 's/^/    /'
+        WARNING_FINDINGS=$((WARNING_FINDINGS + 1))
+    fi
+
+    if [ -z "$REMOVED_ASSERTS" ] && [ -z "$SKIPPED_TESTS" ]; then
+        echo "  [PASS] Test assertions remain sound; no skipped tests introduced."
+    fi
+else
+    echo "  [INFO] No test files modified in this diff."
+fi
+
+# 5. Check for Empty Exception Handling (Swallowed Errors)
+EMPTY_CATCH="$(git diff "$BASE_REF" 2>/dev/null | grep -E -A 1 '^\+.*(except.*:|catch\s*\(.*\)\s*\{)' | grep -E '^\+\s*(pass|return|continue|//|\})' || true)"
+if [ -n "$EMPTY_CATCH" ]; then
+    echo "  [WARN] Possible swallowed exceptions detected in diff:"
+    printf "%s\n" "$EMPTY_CATCH" | head -n 5 | sed 's/^/    /'
+    WARNING_FINDINGS=$((WARNING_FINDINGS + 1))
+fi
+
+echo ""
+echo "-----------------------------------"
+if [ "$CRITICAL_FINDINGS" -gt 0 ]; then
+    echo "Audit Result: ATTENTION NEEDED ($CRITICAL_FINDINGS critical items, $WARNING_FINDINGS warnings)"
+    echo "Note: Critical items require deliberate review (e.g. migration verification)."
+    exit 0
+elif [ "$WARNING_FINDINGS" -gt 0 ]; then
+    echo "Audit Result: PASS WITH WARNINGS ($WARNING_FINDINGS warnings)"
+    exit 0
+else
+    echo "Audit Result: CLEAN PASS"
+    exit 0
+fi

@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$ROOT_DIR"
+
+echo "=== Lean Harness Doctor ==="
+ERRORS=0
+WARNINGS=0
+
+pass() {
+    echo "  [PASS] $1"
+}
+
+warn() {
+    echo "  [WARN] $1"
+    WARNINGS=$((WARNINGS + 1))
+}
+
+fail() {
+    echo "  [FAIL] $1"
+    ERRORS=$((ERRORS + 1))
+}
+
+# 1. Git Checks
+echo "Checking Git baseline..."
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    pass "Inside Git repository"
+    CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || echo 'detached')"
+    pass "Current branch: $CURRENT_BRANCH"
+    if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+        pass "Working tree is clean"
+    else
+        warn "Working tree has uncommitted modifications"
+    fi
+else
+    fail "Not inside a Git repository"
+fi
+
+# 2. Tooling Checks
+echo "Checking runtime dependencies..."
+if command -v git >/dev/null 2>&1; then
+    pass "Git available ($(git --version))"
+else
+    fail "Git is missing"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+    pass "Python 3 available ($(python3 --version))"
+else
+    fail "Python 3 is missing"
+fi
+
+if command -v omp >/dev/null 2>&1; then
+    pass "OMP CLI available ($(omp --version 2>/dev/null || echo 'installed'))"
+else
+    warn "OMP CLI not in PATH (optional if using Claude Code)"
+fi
+
+# 3. Standard Interface Checks
+echo "Checking standard interfaces..."
+if [ -f "Makefile" ]; then
+    pass "Makefile present"
+    for verb in check test dev demo fmt lint; do
+        if grep -q "^${verb}:" Makefile; then
+            pass "Makefile defines standard verb: $verb"
+        else
+            warn "Makefile missing standard verb: $verb"
+        fi
+    done
+else
+    warn "Root Makefile missing (run 'make' setup recommended)"
+fi
+
+# 4. Harness Binding & Integrity Checks
+echo "Checking Harness bindings and components..."
+if [ -f "continuity/contract.md" ]; then
+    # Running inside Lean Harness core repository
+    if [ -d "policy" ] && [ -f "policy/index.md" ]; then
+        pass "Lean Harness Policy documents present"
+    else
+        fail "Policy directory missing or incomplete"
+    fi
+
+    if [ -d "skills" ] && [ -d "skills/_shared" ]; then
+        pass "Agent Skills present ($(find skills -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ') skills registered)"
+    else
+        fail "Skills directory missing or incomplete"
+    fi
+
+    if [ -x "bin/test" ]; then
+        pass "Test runner bin/test executable"
+        if ./bin/test >/dev/null 2>&1; then
+            pass "Test suite passes cleanly"
+        else
+            fail "Test suite has failures"
+        fi
+    else
+        warn "bin/test not found or not executable"
+    fi
+else
+    # Running inside a consumer project
+    if [ -f "stack.mk" ]; then
+        pass "Technology stack adapter (stack.mk) present"
+    else
+        warn "Missing stack.mk adapter"
+    fi
+
+    if [ -d ".omp" ] || [ -d ".claude" ]; then
+        pass "Lean Harness runtime bound (.omp / .claude)"
+    else
+        warn "Project not bound to Lean Harness runtimes (run bind-project.sh)"
+    fi
+fi
+
+echo "-----------------------------------"
+if [ "$ERRORS" -eq 0 ]; then
+    echo "Doctor check complete: HEALTHY ($WARNINGS warnings)"
+    exit 0
+else
+    echo "Doctor check complete: UNHEALTHY ($ERRORS errors, $WARNINGS warnings)"
+    exit 1
+fi

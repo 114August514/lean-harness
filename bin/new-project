@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+TARGET_DIR=""
+STACK="python-uv"
+RUNTIME="all"
+FORCE=false
+PROJECT_NAME=""
+
+usage() {
+    cat <<EOF
+Usage: ./bin/new-project <TARGET_DIR> [OPTIONS]
+
+Scaffold a new project with Lean Harness standard verbs, stack adapters, and agent bindings.
+
+Arguments:
+  TARGET_DIR                   Path to target project directory (required)
+
+Options:
+  --stack <stack>              Technology stack: python-uv, ts-bun, go, rust (default: python-uv)
+  --runtime <omp|claude|all>   Target Agent runtime to bind (default: all)
+  --name <name>                Project name (default: basename of TARGET_DIR)
+  --force                      Overwrite existing directory if non-empty
+  -h, --help                   Show this help message
+
+Examples:
+  ./bin/new-project ~/Projects/my-app --stack ts-bun
+  ./bin/new-project ~/Projects/backend-svc --stack go --runtime omp
+EOF
+    exit 0
+}
+
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --stack)
+            STACK="$2"
+            shift 2
+            ;;
+        --runtime)
+            RUNTIME="$2"
+            shift 2
+            ;;
+        --name)
+            PROJECT_NAME="$2"
+            shift 2
+            ;;
+        --force)
+            FORCE=true
+            shift
+            ;;
+        -h|--help)
+            usage
+            ;;
+        -*)
+            echo "Error: Unknown option $1" >&2
+            exit 1
+            ;;
+        *)
+            if [ -z "$TARGET_DIR" ]; then
+                TARGET_DIR="$1"
+            else
+                echo "Error: Multiple target directories specified: $TARGET_DIR and $1" >&2
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$TARGET_DIR" ]; then
+    echo "Error: TARGET_DIR is required." >&2
+    usage
+fi
+
+TARGET_DIR="$(mkdir -p "$TARGET_DIR" && cd "$TARGET_DIR" && pwd -P)"
+PROJECT_NAME="${PROJECT_NAME:-$(basename "$TARGET_DIR")}"
+
+# Check directory contents
+if [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ] && [ "$FORCE" = false ]; then
+    echo "Error: Target directory '$TARGET_DIR' is not empty. Use --force to overwrite." >&2
+    exit 1
+fi
+
+ADAPTER_SRC="$ROOT_DIR/templates/adapters/${STACK}.mk"
+if [ ! -f "$ADAPTER_SRC" ]; then
+    echo "Error: Unsupported stack '${STACK}'. Available adapters:" >&2
+    ls "$ROOT_DIR/templates/adapters" | sed 's/\.mk$//; s/^/  - /' >&2
+    exit 1
+fi
+
+echo "=== Scaffolding Lean Harness Project: $PROJECT_NAME ==="
+echo "Target:  $TARGET_DIR"
+echo "Stack:   $STACK"
+echo "Runtime: $RUNTIME"
+
+# 1. Copy project skeleton
+echo "Copying project skeleton..."
+cp -r "$ROOT_DIR/templates/project-skeleton/." "$TARGET_DIR/"
+
+# 2. Setup stack.mk and initial runnable Tracer Bullet skeleton
+echo "Applying stack adapter ($STACK)..."
+cp "$ADAPTER_SRC" "$TARGET_DIR/stack.mk"
+
+STACK_BOILERPLATE="$ROOT_DIR/templates/stacks/${STACK}"
+if [ -d "$STACK_BOILERPLATE" ]; then
+    echo "Seeding initial runnable Tracer Bullet skeleton ($STACK)..."
+    cp -r "$STACK_BOILERPLATE/." "$TARGET_DIR/"
+fi
+
+# 3. Create minimal README if none
+if [ ! -f "$TARGET_DIR/README.md" ]; then
+    cat >"$TARGET_DIR/README.md" <<EOF
+# $PROJECT_NAME
+
+This project is powered by [Lean Harness](https://github.com/114August514/lean-harness).
+
+## Standard Engineering Commands
+- \`make check\`  : Pre-commit gate (format check, lint, tests)
+- \`make test\`   : Run test suite
+- \`make dev\`    : Run local dev / hot reload
+- \`make doctor\` : Check repository baseline
+- \`make audit\`  : Scan diff for high-risk boundaries
+EOF
+fi
+
+# 4. Copy doctor & audit scripts into bin/ if not present
+mkdir -p "$TARGET_DIR/bin"
+cp "$ROOT_DIR/bin/doctor" "$TARGET_DIR/bin/doctor"
+cp "$ROOT_DIR/bin/audit" "$TARGET_DIR/bin/audit"
+chmod +x "$TARGET_DIR/bin/doctor" "$TARGET_DIR/bin/audit"
+
+# 5. Initialize Git if not a repo
+if ! git -C "$TARGET_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Initializing Git repository..."
+    git -C "$TARGET_DIR" init -b main >/dev/null 2>&1 || git -C "$TARGET_DIR" init >/dev/null 2>&1
+fi
+
+# 6. Bind Lean Harness runtimes
+echo "Binding Agent runtimes ($RUNTIME)..."
+"$ROOT_DIR/bind-project.sh" "$TARGET_DIR" --runtime "$RUNTIME" --dev --force
+
+# 7. Initial Git commit
+if [ -z "$(git -C "$TARGET_DIR" status --porcelain 2>/dev/null)" ]; then
+    echo "Git working tree already clean."
+else
+    echo "Creating initial baseline commit..."
+    git -C "$TARGET_DIR" add -A
+    git -C "$TARGET_DIR" commit -m "chore: scaffold project with lean-harness ($STACK)" >/dev/null 2>&1 || true
+fi
+
+echo "------------------------------------------------------"
+echo "Project successfully initialized at: $TARGET_DIR"
+echo ""
+echo "Next steps:"
+echo "  1. cd $TARGET_DIR"
+echo "  2. make doctor"
+echo "  3. Start building with your favorite Agent (omp / claude)"

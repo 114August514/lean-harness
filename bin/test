@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$ROOT_DIR"
+
+# 1. Try uv if venv is healthy
+if command -v uv >/dev/null 2>&1 && uv run pytest --version >/dev/null 2>&1; then
+    exec uv run pytest "$@"
+fi
+
+# 2. Try python3 with cached pytest if in local uv archive
+PYTEST_RUNNER="
+import sys, os, glob
+cache_dir = os.path.expanduser('~/.cache/uv/archive-v0')
+cached_paths = ['$ROOT_DIR/continuity']
+if os.path.isdir(cache_dir):
+    cached_paths.extend(glob.glob(os.path.join(cache_dir, '*')))
+    cached_paths.extend(glob.glob(os.path.join(cache_dir, '*/lib/python*/site-packages')))
+sys.path = [p for p in cached_paths if p not in sys.path] + sys.path
+try:
+    import pytest
+    sys.exit(pytest.main(sys.argv[1:] or ['$ROOT_DIR/continuity/tests']))
+except ImportError:
+    import unittest
+    loader = unittest.TestLoader()
+    suite = loader.discover('$ROOT_DIR/continuity/tests')
+    runner = unittest.TextTestRunner(verbosity=2)
+    res = runner.run(suite)
+    sys.exit(0 if res.wasSuccessful() else 1)
+"
+
+exec python3 -c "$PYTEST_RUNNER" "$@"
