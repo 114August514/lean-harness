@@ -67,10 +67,13 @@
 - `decision-boundaries.md` 的“必须请求人类决定”
 - `decision-boundaries.md` 的“未明确授权时禁止执行”
 
-编写日志、异常消息或用户可见文案（错误提示、确认对话框、Toast、表单反馈）时，阅读：
+涉及"好软件该怎么做"的领域知识时，使用对应的工程知识 Skill（规则都标注了来源规范）：
 
-- [`../docs/references/logging.md`](../docs/references/logging.md)
-- [`../docs/references/ux.md`](../docs/references/ux.md)
+- 从想法到交付的阶段与产出：`software-lifecycle`
+- README、spec、ADR、CHANGELOG、提交信息、注释：`project-docs`
+- 前端工程与交互文案（错误提示、确认对话框、Toast、表单反馈）：`frontend-engineering`
+- API 契约、错误模型、鉴权、迁移、日志与可观测性：`backend-engineering`
+- 程序里调用 LLM 的 prompt：`llm-prompts-in-code`
 
 准备宣称完成或停止时，阅读：
 

@@ -24,7 +24,8 @@ Lean Harness
 │   ├── bin/new-project      # 一键脚手架：快速初始化具备 Lean Harness 规格的新项目
 │   └── stack.mk             # 语言无关的标准动词适配器（Python/TS/Go/Rust）
 ├── 责任与能力闭环 (Skills)
-│   └── skills/              # align / implement / verify / review / finish / debug
+│   ├── skills/              # 流程：align / implement / verify / review / finish / debug / investigate
+│   └── skills/              # 工程知识：software-lifecycle / project-docs / frontend-engineering / backend-engineering / llm-prompts-in-code
 ├── 事实连续性与可逆性 (Continuity & Substrates)
 │   ├── continuity/          # Python 恢复引擎：per-worktree 恢复日志与状态重构
 │   └── substrates/git/      # 原生 Git 契约：Linked Worktree 安全隔离与原子回退
