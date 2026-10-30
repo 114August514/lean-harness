@@ -67,6 +67,11 @@
 - `decision-boundaries.md` 的“必须请求人类决定”
 - `decision-boundaries.md` 的“未明确授权时禁止执行”
 
+编写日志、异常消息或用户可见文案（错误提示、确认对话框、Toast、表单反馈）时，阅读：
+
+- [`../docs/references/logging.md`](../docs/references/logging.md)
+- [`../docs/references/ux.md`](../docs/references/ux.md)
+
 准备宣称完成或停止时，阅读：
 
 - `working-contract.md` 的“完成语义”
