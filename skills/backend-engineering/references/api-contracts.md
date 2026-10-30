@@ -97,6 +97,32 @@ Content-Type: application/problem+json
 - `instance` 可作为本次问题/支持定位标识，但不要泄露内部路径、SQL、stack、secret 或他人对象信息。
 - 未预期异常记录内部 cause 与关联 ID，对外返回普通 5xx Problem Details。
 
+### 非 HTTP 边界（Tauri 命令、IPC、Bot 消息）
+
+RFC 9457 是 HTTP 规范，没有 status 和 URL 的边界不必硬套，但同一套思路仍然适用：
+稳定的机器可读种类 + 给人看的说明 + 可选细节，客户端按种类分支。
+
+- Tauri v2 命令返回 `Result<T, E>`，`Err` 会让前端 `invoke()` 的 promise reject；`E` 必须实现
+  `serde::Serialize`。官方建议用 `thiserror` 定义自己的错误枚举，而不是到处 `map_err(to_string)`，
+  这样可能出现的错误一目了然，并可序列化为带种类的结构映射到 TS 枚举：
+
+  ```rust
+  #[derive(Debug, thiserror::Error)]
+  enum ExportError {
+      #[error("聊天记录不存在")]
+      NotFound,
+      #[error(transparent)]
+      Io(#[from] std::io::Error),
+  }
+
+  #[derive(serde::Serialize)]
+  #[serde(tag = "kind", content = "message", rename_all = "camelCase")]
+  enum ExportErrorKind { NotFound(String), Io(String) }
+  ```
+
+- 前端按 `kind` 分支，`message` 只用于展示；IO 等内部错误的原文先记日志，对用户只给可行动的说明
+  （文案见 frontend-engineering 的 ux-writing）。
+
 ## 幂等
 
 客户端看不到响应时不知道服务端是否已提交，因此“网络失败就重试”必须和服务端幂等一起设计。
@@ -137,3 +163,4 @@ HTTP adapter 把已验证 DTO 转成业务输入，再把业务结果映射回�
 - https://github.com/microsoft/api-guidelines/blob/vNext/azure/Guidelines.md
 - https://www.rfc-editor.org/rfc/rfc9457.html
 - https://docs.stripe.com/api/idempotent_requests
+- https://v2.tauri.app/develop/calling-rust/#error-handling

@@ -27,7 +27,7 @@ Python 临时依赖使用 `uv run --with <package> ...`，不污染项目环境�
 | 场景 | 先读 |
 |---|---|
 | 资源、路径、字段命名、分页、版本、OpenAPI、生成客户端 | [API 契约](references/api-contracts.md) |
-| RFC 9457 错误、稳定错误码、幂等重试 | [API 契约](references/api-contracts.md) |
+| RFC 9457 错误、稳定错误码、幂等重试；Tauri 命令 / IPC 等非 HTTP 边界的错误 | [API 契约](references/api-contracts.md) |
 | authentication / authorization、BOLA、边界校验 | [安全边界](references/security-boundaries.md) |
 | 数据建模、约束、migration、expand/contract、配置与 secrets | [数据与配置](references/data-and-config.md) |
 | logs / metrics / traces、请求关联、后台任务 | [运行与后台任务](references/runtime-and-jobs.md) |
