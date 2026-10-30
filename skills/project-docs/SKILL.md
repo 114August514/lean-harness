@@ -68,8 +68,8 @@ description: >-
 
 ## 与本仓库骨架的关系
 
-`templates/project-skeleton/docs/spec.md` 是 Lean Harness 的 shaping 与垂直切片契约，
-`templates/project-skeleton/docs/walkthrough.md` 是阶段交付/无人值守验收记录；已有项目使用它们时继续沿用，
+Harness 根目录下的 `templates/project-skeleton/docs/spec.md` 是 Lean Harness 的 shaping 与垂直切片契约，
+`templates/project-skeleton/docs/walkthrough.md` 是阶段交付/无人值守验收记录（脚手架生成项目时复制为项目的 `docs/`）；已有项目使用它们时继续沿用，
 不要用本 skill 的通用 `templates/spec.md` 覆盖，也不要把 walkthrough 改造成 ADR 或 CHANGELOG。
 
 ## 自检
