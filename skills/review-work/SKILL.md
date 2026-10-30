@@ -43,6 +43,8 @@ description: 从实现者之外的审查视角检查工作结果，按风险选�
    Alignment     是否与目标、验收和人类决定一致
    ```
 
+   审代码时参考 `references/code-review.md`。
+
    Debugging：
 
    ```text
