@@ -38,5 +38,9 @@ jobs:
           cd continuity
           uv run python -m continuity --repo "$tmp" recovery status | grep -q '"binding": null'
 
+      # Review signal for pull requests. Pushes to main come from merged PRs
+      # that were already audited, and after a force push the previous tip
+      # (github.event.before) may no longer exist in the clone.
       - name: Change audit
-        run: make audit BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+        if: github.event_name == 'pull_request'
+        run: make audit BASE="${{ github.event.pull_request.base.sha }}"
