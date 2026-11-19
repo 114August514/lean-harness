@@ -143,7 +143,7 @@ fi
 
 # 6. Bind Lean Harness runtimes
 echo "Binding Agent runtimes ($RUNTIME)..."
-"$ROOT_DIR/bind-project.sh" "$TARGET_DIR" --runtime "$RUNTIME" --dev --force
+"$ROOT_DIR/bind-project.sh" "$TARGET_DIR" --runtime "$RUNTIME" --dev
 
 # 7. Initial Git commit
 if [ -z "$(git -C "$TARGET_DIR" status --porcelain 2>/dev/null)" ]; then
@@ -151,7 +151,7 @@ if [ -z "$(git -C "$TARGET_DIR" status --porcelain 2>/dev/null)" ]; then
 else
     echo "Creating initial baseline commit..."
     git -C "$TARGET_DIR" add -A
-    git -C "$TARGET_DIR" commit -m "chore: scaffold project with lean-harness ($STACK)" >/dev/null 2>&1 || true
+    git -C "$TARGET_DIR" commit -q -m "chore: scaffold project with lean-harness ($STACK)"
 fi
 
 echo "------------------------------------------------------"
@@ -159,5 +159,5 @@ echo "Project successfully initialized at: $TARGET_DIR"
 echo ""
 echo "Next steps:"
 echo "  1. cd $TARGET_DIR"
-echo "  2. make doctor"
-echo "  3. Start building with your favorite Agent (omp / claude)"
+echo "  2. make setup && make check"
+echo "  3. make doctor"
