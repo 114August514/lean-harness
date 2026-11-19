@@ -4,8 +4,8 @@
 
 ## 已验证版本
 
-- 日期：2026-08-09
-- 版本：`omp/17.2.11`
+- 日期：2026-11-19（初次调查 2026-08-09，`omp/17.2.11`）
+- 版本：`omp/18.18.8`；本次复核了项目 `config.yml` 生效（Harness skills 从 `customDirectories` 加载）、`.omp/AGENTS.md` 注入、`.omp/mcp.json` 的 GitHub MCP 挂载。下表其余行为沿用初次调查结论
 - Revision：该发行版的 `omp --version` 不提供源码 revision
 - 入口：在仓库根目录运行 `omp`
 
@@ -73,10 +73,8 @@ continuity/
 ```bash
 omp --version
 omp -p --no-session "说明 Lean Harness 的架构入口，并列出发现的 Harness Skills。不要修改文件。"
-uv run pytest -q
-uv run ruff check .
-uv run python -m compileall -q continuity
-uv run python -m continuity --help
+make check
+(cd continuity && uv run python -m continuity --help)
 ```
 
 Dogfooding readiness 还要求两个场景：
@@ -86,4 +84,4 @@ Dogfooding readiness 还要求两个场景：
 
 ## 外部项目
 
-固定版本安装、最薄 project binding 和 Continuity 调用方式见 [`../docs/consumer-project.md`](../docs/consumer-project.md)。
+Release 安装、project binding 与新项目脚手架见 [`../docs/consumer-project.md`](../docs/consumer-project.md)。
