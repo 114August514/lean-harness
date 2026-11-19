@@ -1,7 +1,7 @@
 #!/bin/sh
 # Bind a project to this Lean Harness checkout. The binding only references
 # the checkout; it never copies policy, skills, continuity or Git rules.
-# Requires Linux coreutils with mktemp -d, mv -T -n and ln -T.
+# Requires Linux coreutils: mktemp -d, mv -T -n and stat -c.
 set -eu
 
 REPOSITORY="114August514/lean-harness"
@@ -22,8 +22,9 @@ Bind PROJECT_DIR (default: current directory) to this Lean Harness checkout.
 Without --dev the checkout must sit on an exact release tag whose GitHub
 release notes contain "Release commit: <full sha>" for that commit, and it
 must contain no modified, untracked or ignored files. Existing files are
-never overwritten. A run that fails removes what it created, except files
-that changed in the meantime, which it keeps and reports.
+never overwritten. A run that fails or is interrupted deletes what it
+published, but only objects that are provably the ones it created and are
+unchanged; anything else is kept and reported.
 EOF
 }
 
@@ -38,7 +39,7 @@ exists() {
 }
 
 # Signals are recorded and acted on only at checkpoints, so everything the
-# run creates is registered before the cleanup below can run.
+# run publishes is registered before cleanup can run.
 signal_status=
 trap 'signal_status=129' HUP
 trap 'signal_status=130' INT
@@ -146,65 +147,96 @@ if [ "$want_claude" = true ]; then
 fi
 checkpoint
 
-# The binding is staged under the project root and moved into place. Unless
-# the run completes, cleanup removes what it published, but only while it is
-# still exactly what this run wrote.
+# Every object of the binding is staged in a private directory under the
+# project root and renamed into place one at a time. The identity (device and
+# inode) of each staged object is recorded first, and renaming keeps it.
+# Unless the run completes, cleanup deletes a published object only while it
+# still has that identity and, for files, the staged content, so it never
+# deletes what another writer created or changed.
 staging=
 completed=false
-created_omp=false
-created_claude_md=false
-created_claude_dir=false
-created_skills_dir=false
-created_links=
+published=
+link_names=
 kept=
 
+identity() {
+    stat -c '%d:%i' -- "$1" 2>/dev/null || :
+}
+# record LABEL PATH: remember the identity of staged object PATH.
+record() {
+    identity "$2" >"$staging/id.$1"
+}
+# is_ours LABEL PATH: PATH is still the object recorded under LABEL.
+is_ours() {
+    current=$(identity "$2")
+    [ -n "$current" ] && [ "$current" = "$(cat "$staging/id.$1" 2>/dev/null)" ]
+}
+destination() {
+    case "$1" in
+        omp) printf '%s\n' "$project_root/.omp" ;;
+        claude) printf '%s\n' "$project_root/.claude" ;;
+        skills) printf '%s\n' "$project_root/.claude/skills" ;;
+        link.*) printf '%s\n' "$project_root/.claude/skills/${1#link.}" ;;
+        claudemd) printf '%s\n' "$project_root/CLAUDE.md" ;;
+    esac
+}
 keep() {
     kept="$kept $1"
 }
-
-# Remove published file $2 if it still equals the staged original $1.
-remove_unchanged() {
+# remove_file LABEL PATH ORIGINAL
+remove_file() {
+    if is_ours "$1" "$2" && cmp -s "$3" "$2"; then
+        rm -f -- "$2" || :
+    elif exists "$2"; then
+        keep "$2"
+    fi
+}
+# remove_dir LABEL PATH: rmdir only, so a directory with content survives.
+remove_dir() {
     if ! exists "$2"; then
         return 0
     fi
-    if cmp -s "$1" "$2"; then
-        rm -f -- "$2" || :
+    if is_ours "$1" "$2"; then
+        rmdir -- "$2" 2>/dev/null || keep "$2"
     else
         keep "$2"
     fi
 }
 
 undo() {
-    if [ "$created_claude_md" = true ]; then
-        remove_unchanged "$staging/CLAUDE.md.orig" "$project_root/CLAUDE.md"
-    fi
-    for name in $created_links; do
-        link="$project_root/.claude/skills/$name"
-        if exists "$link" && [ "$(readlink "$link")" != "$release_root/skills/$name" ]; then
-            keep "$link"
-        else
-            rm -f -- "$link" || :
-        fi
+    for label in $published; do
+        path=$(destination "$label")
+        case "$label" in
+            omp)
+                if is_ours omp "$path"; then
+                    for file in config.yml AGENTS.md mcp.json; do
+                        remove_file "omp.$file" "$path/$file" "$staging/omp.orig/$file"
+                    done
+                fi
+                remove_dir omp "$path"
+                ;;
+            claude | skills)
+                remove_dir "$label" "$path"
+                ;;
+            link.*)
+                if is_ours "$label" "$path"; then
+                    rm -f -- "$path" || :
+                elif exists "$path"; then
+                    keep "$path"
+                fi
+                ;;
+            claudemd)
+                remove_file claudemd "$path" "$staging/CLAUDE.md.orig"
+                ;;
+        esac
     done
-    if [ "$created_skills_dir" = true ]; then
-        rmdir -- "$project_root/.claude/skills" 2>/dev/null || keep "$project_root/.claude/skills"
-    fi
-    if [ "$created_claude_dir" = true ]; then
-        rmdir -- "$project_root/.claude" 2>/dev/null || keep "$project_root/.claude"
-    fi
-    if [ "$created_omp" = true ]; then
-        for file in config.yml AGENTS.md mcp.json; do
-            remove_unchanged "$staging/omp.orig/$file" "$project_root/.omp/$file"
-        done
-        rmdir -- "$project_root/.omp" 2>/dev/null || keep "$project_root/.omp"
-    fi
     if [ -n "$kept" ]; then
-        printf 'error: partial binding left in place, changed or extended during the run:%s\n' "$kept" >&2
+        printf 'error: left in place because it may not be exactly what this run created:%s\n' "$kept" >&2
     fi
 }
 
 cleanup() {
-    if [ "$completed" != true ]; then
+    if [ "$completed" != true ] && [ -n "$staging" ]; then
         undo
     fi
     if [ -n "$staging" ]; then
@@ -213,12 +245,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Move staged $1 to $2 unless something already exists there.
+# publish LABEL STAGED: rename STAGED to the destination of LABEL unless
+# something exists there. The label is registered whenever the object has
+# arrived, even if mv itself reported a failure afterwards.
 publish() {
-    if mv -T -n -- "$1" "$2" && ! exists "$1"; then
-        return 0
+    target=$(destination "$1")
+    mv -T -n -- "$2" "$target" || :
+    if exists "$2" || ! exists "$target"; then
+        die "cannot publish $target: it appeared meanwhile or could not be written"
     fi
-    die "$2 appeared while binding; left it untouched"
+    published="$1 $published"
 }
 
 staging=$(mktemp -d "$project_root/.lean-harness-bind.XXXXXX") ||
@@ -267,6 +303,10 @@ EOF
     # OMP reads MCP servers only from the project's .omp/, so this one file is copied.
     cp -- "$release_root/.omp/mcp.json" "$staging/omp/mcp.json"
     cp -R -- "$staging/omp" "$staging/omp.orig"
+    record omp "$staging/omp"
+    for file in config.yml AGENTS.md mcp.json; do
+        record "omp.$file" "$staging/omp/$file"
+    done
 fi
 
 if [ "$want_claude" = true ]; then
@@ -281,34 +321,37 @@ Harness skills are linked into \`.claude/skills/\`.
 $footer
 EOF
     cp -- "$staging/CLAUDE.md" "$staging/CLAUDE.md.orig"
+    record claudemd "$staging/CLAUDE.md"
+    mkdir "$staging/claude" "$staging/skills" "$staging/links"
+    record claude "$staging/claude"
+    record skills "$staging/skills"
+    for name in $(skill_names); do
+        ln -s -- "$release_root/skills/$name" "$staging/links/$name"
+        record "link.$name" "$staging/links/$name"
+        link_names="$link_names $name"
+    done
 fi
 checkpoint
 
 if [ "$want_omp" = true ]; then
-    publish "$staging/omp" "$project_root/.omp"
-    created_omp=true
+    publish omp "$staging/omp"
     checkpoint
 fi
-
 if [ "$want_claude" = true ]; then
     if ! exists "$project_root/.claude"; then
-        mkdir -- "$project_root/.claude"
-        created_claude_dir=true
+        publish claude "$staging/claude"
         checkpoint
     fi
     if ! exists "$project_root/.claude/skills"; then
-        mkdir -- "$project_root/.claude/skills"
-        created_skills_dir=true
+        publish skills "$staging/skills"
         checkpoint
     fi
-    for name in $(skill_names); do
-        # -T: fail instead of creating the link inside a directory that appeared meanwhile.
-        ln -s -T -- "$release_root/skills/$name" "$project_root/.claude/skills/$name"
-        created_links="$created_links $name"
+    for name in $link_names; do
+        publish "link.$name" "$staging/links/$name"
         checkpoint
     done
-    publish "$staging/CLAUDE.md" "$project_root/CLAUDE.md"
-    created_claude_md=true
+    publish claudemd "$staging/CLAUDE.md"
+    checkpoint
 fi
 completed=true
 

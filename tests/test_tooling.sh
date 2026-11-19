@@ -187,53 +187,77 @@ else
     fail "a conflicting .claude is refused before anything is written"
 fi
 
-# Fault injection through a stand-in ln: it fails once $FAKE_LN_BUDGET links
-# exist (first writing $FAKE_LN_INTRUDE, like a concurrent writer), and sends
-# TERM to the binding script right after creating link $FAKE_LN_TERM_AT.
-mkdir "$work/fakeln"
-cat >"$work/fakeln/ln" <<EOF
+# Fault injection through a stand-in mv (bind-project.sh publishes every object
+# with mv). After $FAKE_MV_BUDGET moves it fails, first running the shell
+# snippet $FAKE_MV_BEFORE_FAIL to imitate a concurrent writer. When a
+# destination ends with $FAKE_MV_TERM_AFTER it moves, then sends TERM to the
+# script, and with FAKE_MV_TERM_SELF=1 also dies from TERM itself.
+real_mv="$(command -v mv)"
+mkdir "$work/fakemv"
+cat >"$work/fakemv/mv" <<EOF
 #!/bin/sh
-count=\$(cat "\$FAKE_LN_STATE" 2>/dev/null || echo 0)
-if [ "\$count" -ge "\$FAKE_LN_BUDGET" ]; then
-    if [ -n "\${FAKE_LN_INTRUDE:-}" ]; then printf 'theirs\n' >"\$FAKE_LN_INTRUDE"; fi
-    echo "ln: injected failure" >&2
+count=\$(cat "\$FAKE_MV_STATE" 2>/dev/null || echo 0)
+if [ "\$count" -ge "\${FAKE_MV_BUDGET:-1000}" ]; then
+    if [ -n "\${FAKE_MV_BEFORE_FAIL:-}" ]; then sh -c "\$FAKE_MV_BEFORE_FAIL"; fi
+    echo "mv: injected failure" >&2
     exit 1
 fi
-"$(command -v ln)" "\$@" || exit
-count=\$((count + 1))
-echo "\$count" >"\$FAKE_LN_STATE"
-if [ "\$count" = "\${FAKE_LN_TERM_AT:-0}" ]; then kill -TERM "\$PPID"; fi
+"$real_mv" "\$@" || exit
+echo \$((count + 1)) >"\$FAKE_MV_STATE"
+for last in "\$@"; do :; done
+case "\$last" in
+    *"\${FAKE_MV_TERM_AFTER:-/nothing}")
+        kill -TERM "\$PPID"
+        if [ -n "\${FAKE_MV_TERM_SELF:-}" ]; then kill -TERM \$\$; fi
+        ;;
+esac
 EOF
-chmod +x "$work/fakeln/ln"
-# failing_bind NAME [VAR=VALUE...]: bind a fresh project with the stand-in ln.
+chmod +x "$work/fakemv/mv"
+# failing_bind NAME [VAR=VALUE...]: bind the fresh project $work/bind-NAME
+# with the stand-in mv configured by VAR=VALUE.
 failing_bind() {
     proj="$work/bind-$1"
     shift
     new_repo "$proj"
-    rm -f "$work/ln-count"
-    run env PATH="$work/fakeln:$PATH" FAKE_LN_STATE="$work/ln-count" FAKE_LN_BUDGET=1000 "$@" \
+    rm -f "$work/mv-count"
+    run env PATH="$work/fakemv:$PATH" FAKE_MV_STATE="$work/mv-count" "$@" \
         ./bind-project.sh "$proj" --runtime all --dev
 }
-failing_bind after-two-links FAKE_LN_BUDGET=2
-if [ "$status" -ne 0 ] && grep -q 'injected failure' "$log" && [ "$(cat "$work/ln-count")" = 2 ] &&
+# Moves: .omp, .claude, .claude/skills, then one per skill link, then CLAUDE.md.
+failing_bind midway FAKE_MV_BUDGET=4
+if [ "$status" -ne 0 ] && grep -q 'injected failure' "$log" && [ "$(cat "$work/mv-count")" = 4 ] &&
     unbound "$proj" && [ ! -e "$proj/.claude" ]; then
-    pass "a bind that fails after two skill links removes the links, .claude and .omp"
+    pass "a bind that fails after publishing .omp and a skill link removes all of it"
 else
-    fail "a bind that fails after two skill links removes the links, .claude and .omp"
+    fail "a bind that fails after publishing .omp and a skill link removes all of it"
 fi
-failing_bind intruder FAKE_LN_BUDGET=1 FAKE_LN_INTRUDE="$work/bind-intruder/.omp/notes.md"
+failing_bind intruder FAKE_MV_BUDGET=1 \
+    FAKE_MV_BEFORE_FAIL="printf 'theirs\n' >'$work/bind-intruder/.omp/notes.md'"
 if [ "$status" -ne 0 ] && [ "$(cat "$proj/.omp/notes.md" 2>/dev/null)" = theirs ] &&
-    [ "$(ls -A "$proj/.omp")" = notes.md ] && [ ! -e "$proj/.claude" ] && [ ! -e "$proj/CLAUDE.md" ] &&
-    grep -q 'partial binding left in place.*/\.omp' "$log"; then
-    pass "rollback keeps content it did not write and reports it"
+    [ "$(ls -A "$proj/.omp")" = notes.md ] && grep -q 'left in place.*/\.omp' "$log"; then
+    pass "rollback keeps content another writer added and reports it"
 else
-    fail "rollback keeps content it did not write and reports it"
+    fail "rollback keeps content another writer added and reports it"
 fi
-failing_bind terminated FAKE_LN_TERM_AT=1
-if [ "$status" -eq 143 ] && [ "$(cat "$work/ln-count")" = 1 ] && unbound "$proj" && [ ! -e "$proj/.claude" ]; then
-    pass "TERM right after a link is created still removes everything the run created"
+failing_bind swapped FAKE_MV_BUDGET=1 FAKE_MV_BEFORE_FAIL="cd '$work/bind-swapped' &&
+    '$real_mv' .omp .omp-aside && cp -R .omp-aside elsewhere && ln -s elsewhere .omp"
+if [ "$status" -ne 0 ] && [ -f "$proj/elsewhere/config.yml" ] && [ -f "$proj/elsewhere/AGENTS.md" ] &&
+    grep -q 'left in place.*/\.omp' "$log"; then
+    pass "rollback does not follow a .omp replaced by a link to identical files"
 else
-    fail "TERM right after a link is created still removes everything the run created"
+    fail "rollback does not follow a .omp replaced by a link to identical files"
+fi
+failing_bind term-last FAKE_MV_TERM_AFTER=/CLAUDE.md
+if [ "$status" -eq 143 ] && unbound "$proj" && [ ! -e "$proj/.claude" ]; then
+    pass "TERM during the last publication still rolls everything back"
+else
+    fail "TERM during the last publication still rolls everything back"
+fi
+failing_bind term-both FAKE_MV_TERM_AFTER=/.omp FAKE_MV_TERM_SELF=1
+if [ "$status" -eq 143 ] && unbound "$proj"; then
+    pass "an interrupted mv that already moved .omp still gets rolled back"
+else
+    fail "an interrupted mv that already moved .omp still gets rolled back"
 fi
 
 # Release mode, against a tagged copy of this script and a stand-in for gh.
