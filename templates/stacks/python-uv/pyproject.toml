@@ -6,10 +6,11 @@ requires-python = ">=3.11"
 dependencies = []
 
 [dependency-groups]
+# Exact versions keep the scaffold's make check reproducible; bump deliberately.
 dev = [
-    "mypy>=1.10",
-    "pytest>=8.0",
-    "ruff>=0.12",
+    "mypy==2.4.1",
+    "pytest==9.2.0",
+    "ruff==0.17.5",
 ]
 
 [tool.uv]
