@@ -34,7 +34,7 @@ release 模式确认三件事：checkout 位于 exact tag；该 tag 的 GitHub R
 | OMP | `.omp/config.yml`：加载 Harness skills，关闭 memory、autolearn 和 task isolation；`.omp/AGENTS.md`：导入 Harness 的 `.omp/AGENTS.md`；`.omp/mcp.json`：GitHub MCP（OMP 只从项目 `.omp/` 读取 MCP 配置，所以这一份是复制） |
 | Claude Code | `CLAUDE.md`：导入 Harness 的 `.omp/AGENTS.md`，首次启动时 Claude Code 会请求批准这个外部导入；`.claude/skills/<name>`：指向 Harness skills 的软链 |
 
-项目里已有 `.omp/`、`CLAUDE.md` 或同名 skill 链接，或 `.claude` 不是目录时，脚本在写入任何文件前退出，不覆盖；把需要的几行手工合并进现有配置。中途失败时，脚本删除本次已创建的文件和链接。
+项目里已有 `.omp/`、`CLAUDE.md` 或同名 skill 链接，或 `.claude` 不是目录时，脚本在写入任何文件前退出，不覆盖；把需要的几行手工合并进现有配置。中途失败或被中断时，脚本删除本次创建且之后未被改动的文件、链接和目录；期间被改动或加了内容的会保留，并在错误信息里列出。
 
 ## 新项目
 
