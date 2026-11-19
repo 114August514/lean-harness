@@ -120,6 +120,15 @@ run "$repo/bin/audit"
 expect 0 'skipped tests added' "skip marker in an untracked test file is reported"
 rm -r "$repo/tests"
 
+mkdir "$repo/tests" "$repo/api"
+printf '@pytest.mark.skip\ndef test_x():\n    assert True\n' >"$repo/tests/test_中文.py"
+run "$repo/bin/audit"
+expect 0 'skipped tests added' "skip marker in a non-ASCII test file name is reported"
+printf 'openapi: 3.1.0\n' >"$repo/api/接口.yaml"
+run "$repo/bin/audit"
+expect 1 'api/接口\.yaml' "non-ASCII contract path is critical and named"
+rm -r "$repo/tests" "$repo/api"
+
 git -C "$repo" switch -q -c feature
 mkdir "$repo/migrations"
 printf 'select 1;\n' >"$repo/migrations/001.sql"
@@ -178,20 +187,53 @@ else
     fail "a conflicting .claude is refused before anything is written"
 fi
 
-if [ "$(id -u)" -eq 0 ]; then
-    skip "rollback after a failed bind (root ignores directory permissions)"
-else
-    proj="$work/bind-rollback"
+# Fault injection through a stand-in ln: it fails once $FAKE_LN_BUDGET links
+# exist (first writing $FAKE_LN_INTRUDE, like a concurrent writer), and sends
+# TERM to the binding script right after creating link $FAKE_LN_TERM_AT.
+mkdir "$work/fakeln"
+cat >"$work/fakeln/ln" <<EOF
+#!/bin/sh
+count=\$(cat "\$FAKE_LN_STATE" 2>/dev/null || echo 0)
+if [ "\$count" -ge "\$FAKE_LN_BUDGET" ]; then
+    if [ -n "\${FAKE_LN_INTRUDE:-}" ]; then printf 'theirs\n' >"\$FAKE_LN_INTRUDE"; fi
+    echo "ln: injected failure" >&2
+    exit 1
+fi
+"$(command -v ln)" "\$@" || exit
+count=\$((count + 1))
+echo "\$count" >"\$FAKE_LN_STATE"
+if [ "\$count" = "\${FAKE_LN_TERM_AT:-0}" ]; then kill -TERM "\$PPID"; fi
+EOF
+chmod +x "$work/fakeln/ln"
+# failing_bind NAME [VAR=VALUE...]: bind a fresh project with the stand-in ln.
+failing_bind() {
+    proj="$work/bind-$1"
+    shift
     new_repo "$proj"
-    mkdir -p "$proj/.claude/skills"
-    chmod a-w "$proj/.claude/skills"
-    run ./bind-project.sh "$proj" --runtime all --dev
-    chmod u+w "$proj/.claude/skills"
-    if [ "$status" -ne 0 ] && unbound "$proj"; then
-        pass "a bind that fails midway removes what it created"
-    else
-        fail "a bind that fails midway removes what it created"
-    fi
+    rm -f "$work/ln-count"
+    run env PATH="$work/fakeln:$PATH" FAKE_LN_STATE="$work/ln-count" FAKE_LN_BUDGET=1000 "$@" \
+        ./bind-project.sh "$proj" --runtime all --dev
+}
+failing_bind after-two-links FAKE_LN_BUDGET=2
+if [ "$status" -ne 0 ] && grep -q 'injected failure' "$log" && [ "$(cat "$work/ln-count")" = 2 ] &&
+    unbound "$proj" && [ ! -e "$proj/.claude" ]; then
+    pass "a bind that fails after two skill links removes the links, .claude and .omp"
+else
+    fail "a bind that fails after two skill links removes the links, .claude and .omp"
+fi
+failing_bind intruder FAKE_LN_BUDGET=1 FAKE_LN_INTRUDE="$work/bind-intruder/.omp/notes.md"
+if [ "$status" -ne 0 ] && [ "$(cat "$proj/.omp/notes.md" 2>/dev/null)" = theirs ] &&
+    [ "$(ls -A "$proj/.omp")" = notes.md ] && [ ! -e "$proj/.claude" ] && [ ! -e "$proj/CLAUDE.md" ] &&
+    grep -q 'partial binding left in place.*/\.omp' "$log"; then
+    pass "rollback keeps content it did not write and reports it"
+else
+    fail "rollback keeps content it did not write and reports it"
+fi
+failing_bind terminated FAKE_LN_TERM_AT=1
+if [ "$status" -eq 143 ] && [ "$(cat "$work/ln-count")" = 1 ] && unbound "$proj" && [ ! -e "$proj/.claude" ]; then
+    pass "TERM right after a link is created still removes everything the run created"
+else
+    fail "TERM right after a link is created still removes everything the run created"
 fi
 
 # Release mode, against a tagged copy of this script and a stand-in for gh.
@@ -258,8 +300,9 @@ refused 'not at an exact release tag' "release mode refuses an untagged checkout
 
 echo "[4/4] bin/new-project stacks"
 for stack in python-uv ts-bun go rust; do
-    # src: file the format probes append to; fmt_says: the formatter's report
-    # of a formatting difference; test_says: the runner's report of the probe.
+    # src: file the format probes append to; fmt_says / parse_says: how the
+    # formatter reports a formatting difference / a parse error; test_says:
+    # how the runner reports the failing probe test.
     case "$stack" in
         python-uv)
             tools="uv"
@@ -267,6 +310,7 @@ for stack in python-uv ts-bun go rust; do
             unformatted='x=1'
             unparsable='def ('
             fmt_says='File would be reformatted'
+            parse_says='invalid-syntax'
             probe_file=tests/test_probe.py
             probe=$'def test_probe() -> None:\n    assert False\n'
             test_says='FAILED tests/test_probe\.py::test_probe'
@@ -277,6 +321,7 @@ for stack in python-uv ts-bun go rust; do
             unformatted='export const probe  =  1;'
             unparsable='export const = ;'
             fmt_says='Formatter would have printed'
+            parse_says='aborted due to parsing errors'
             probe_file=tests/probe.test.ts
             probe=$'import { expect, test } from "bun:test";\ntest("probe", () => expect(1).toBe(2));\n'
             test_says='\(fail\) probe'
@@ -287,6 +332,7 @@ for stack in python-uv ts-bun go rust; do
             unformatted='var  probe = 1'
             unparsable='func ('
             fmt_says='^main\.go$'
+            parse_says='main\.go:[0-9]+:[0-9]+: expected'
             probe_file=probe_test.go
             probe=$'package main\n\nimport "testing"\n\nfunc TestProbe(t *testing.T) { t.Fatal("probe") }\n'
             test_says='--- FAIL: TestProbe'
@@ -297,6 +343,7 @@ for stack in python-uv ts-bun go rust; do
             unformatted='fn  probe() {}'
             unparsable='fn ('
             fmt_says='^Diff in .*src/main\.rs'
+            parse_says='--> .*src/main\.rs:[0-9]+:[0-9]+'
             probe_file=tests/probe.rs
             probe=$'#[test]\nfn probe() {\n    panic!("probe");\n}\n'
             test_says='test probe \.\.\. FAILED'
@@ -327,6 +374,8 @@ for stack in python-uv ts-bun go rust; do
     pass "$stack: setup, check and demo pass"
     run "$dir/bin/doctor"
     expect 0 'Doctor: HEALTHY' "$stack: doctor HEALTHY"
+    run make -C "$dir" audit BASE=no-such-ref
+    expect 2 'not a commit' "$stack: make audit passes BASE to bin/audit"
 
     # The gates must fail on broken code, and for the intended reason.
     printf '%s\n' "$unformatted" >>"$dir/$src"
@@ -335,7 +384,7 @@ for stack in python-uv ts-bun go rust; do
     git -C "$dir" checkout -q -- .
     printf '%s\n' "$unparsable" >>"$dir/$src"
     run make -C "$dir" fmt-check
-    expect_failure "$(basename "$src")" "$stack: fmt-check fails when the formatter cannot parse"
+    expect_failure "$parse_says" "$stack: fmt-check fails when the formatter cannot parse"
     git -C "$dir" checkout -q -- .
     mkdir -p "$(dirname "$dir/$probe_file")"
     printf '%s' "$probe" >"$dir/$probe_file"
