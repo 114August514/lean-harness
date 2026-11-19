@@ -10,9 +10,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT_DIR"
 
+# Keep every Git call independent of user and system configuration
+# (commit signing, hooks, default branch name).
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME="Lean Harness Test" GIT_AUTHOR_EMAIL="test@example.invalid"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
+work="$(mktemp -d "${TMPDIR:-/tmp}/harness-tooling-XXXXXX")"
+trap 'chmod -R u+w -- "$work" 2>/dev/null; rm -rf -- "$work"' EXIT
+log="$work/last.log"
+: >"$log"
+status=0
 passes=0
 fails=0
 skips=0
@@ -21,47 +29,56 @@ pass() {
     echo "  [PASS] $1"
     passes=$((passes + 1))
 }
+# fail WHAT: report a failure with the tail of the last command's output.
 fail() {
-    echo "  [FAIL] $1"
+    echo "  [FAIL] $1 (last exit status $status)"
     fails=$((fails + 1))
-    if [ -n "${2:-}" ]; then
-        tail -n 30 "$2" | sed 's/^/      /'
-    fi
+    tail -n 30 "$log" | sed 's/^/      /'
 }
 skip() {
     if [ "${CI:-}" = true ]; then
-        fail "$1 (required in CI)"
+        echo "  [FAIL] $1 (required in CI)"
+        fails=$((fails + 1))
     else
         echo "  [SKIP] $1"
         skips=$((skips + 1))
     fi
 }
-# Run a command quietly and return its exit status without tripping set -e.
-status_of() {
-    local log="$1"
-    shift
-    set +e
-    "$@" >"$log" 2>&1
-    local status=$?
-    set -e
-    return "$status"
+# run CMD...: run CMD with its output in $log and its exit status in $status.
+run() {
+    if "$@" >"$log" 2>&1; then status=0; else status=$?; fi
 }
-
-work="$(mktemp -d "${TMPDIR:-/tmp}/harness-tooling-XXXXXX")"
-trap 'rm -rf -- "$work"' EXIT
-log="$work/last.log"
-
+# expect STATUS ERE WHAT: the last run exited STATUS and printed a line matching ERE.
+expect() {
+    if [ "$status" -eq "$1" ] && grep -qE -- "$2" "$log"; then
+        pass "$3"
+    else
+        fail "$3"
+    fi
+}
+# expect_failure ERE WHAT: the last run failed and printed a line matching ERE.
+expect_failure() {
+    if [ "$status" -ne 0 ] && grep -qE -- "$1" "$log"; then
+        pass "$2"
+    else
+        fail "$2"
+    fi
+}
 new_repo() {
     git init -q -b main "$1"
     git -C "$1" commit -q --allow-empty -m init
 }
+# unbound DIR: DIR holds no binding files and no staging leftovers.
+unbound() {
+    local leftovers
+    leftovers="$(find "$1" -maxdepth 1 -name '.lean-harness-bind.*')"
+    [ ! -e "$1/.omp" ] && [ ! -e "$1/CLAUDE.md" ] && [ -z "$leftovers" ] &&
+        { [ ! -d "$1/.claude/skills" ] || [ -z "$(ls -A "$1/.claude/skills")" ]; }
+}
 
 echo "[1/4] bin/doctor"
-if status_of "$log" ./bin/doctor; then
-    pass "doctor reports HEALTHY on this repository"
-else
-    fail "doctor failed on this repository" "$log"
-fi
+run ./bin/doctor
+expect 0 'Doctor: HEALTHY' "doctor reports HEALTHY on this repository"
 
 echo "[2/4] bin/audit"
 repo="$work/audit"
@@ -70,26 +87,38 @@ mkdir "$repo/bin"
 cp bin/audit "$repo/bin/audit"
 git -C "$repo" add bin/audit
 git -C "$repo" commit -q -m "add audit"
-audit() { status_of "$log" "$repo/bin/audit" "$@"; }
 
-if audit; then pass "clean tree passes"; else fail "clean tree failed" "$log"; fi
+run "$repo/bin/audit"
+expect 0 'No changes against the base' "clean tree passes"
 printf 'x\n' >"$repo/notes.md"
-if audit; then pass "ordinary change passes"; else fail "ordinary change failed" "$log"; fi
+run "$repo/bin/audit"
+expect 0 'Audit: PASS' "ordinary change passes"
+rm "$repo/notes.md"
+
 mkdir -p "$repo/db/migrations"
 printf 'select 1;\n' >"$repo/db/migrations/001.sql"
-if audit; then
-    fail "migration change passed"
-elif grep -q 'db/migrations/001.sql' "$log"; then
-    pass "migration change fails and names the file"
-else
-    fail "migration change failed without naming the file" "$log"
-fi
+run "$repo/bin/audit"
+expect 1 'db/migrations/001\.sql' "nested migration is critical and named"
 rm -r "$repo/db"
+mkdir -p "$repo/services/billing/contracts"
+printf 'syntax = "proto3";\n' >"$repo/services/billing/contracts/billing.proto"
+run "$repo/bin/audit"
+expect 1 'services/billing/contracts/billing\.proto' "nested contract is critical and named"
+rm -r "$repo/services"
+
 printf 'KEY=\n' >"$repo/.env.example"
-if audit; then pass ".env.example is not treated as a secret"; else fail ".env.example flagged" "$log"; fi
+run "$repo/bin/audit"
+expect 0 'Audit: PASS' ".env.example is not treated as a secret"
 printf 'KEY=1\n' >"$repo/.env"
-if audit; then fail ".env passed"; else pass ".env fails"; fi
-rm "$repo/.env" "$repo/.env.example" "$repo/notes.md"
+run "$repo/bin/audit"
+expect 1 '^    \.env$' ".env is critical and named"
+rm "$repo/.env" "$repo/.env.example"
+
+mkdir "$repo/tests"
+printf 'import pytest\n\n\n@pytest.mark.skip\ndef test_new():\n    assert True\n' >"$repo/tests/test_new.py"
+run "$repo/bin/audit"
+expect 0 'skipped tests added' "skip marker in an untracked test file is reported"
+rm -r "$repo/tests"
 
 git -C "$repo" switch -q -c feature
 mkdir "$repo/migrations"
@@ -99,76 +128,179 @@ git -C "$repo" commit -q -m "add migration"
 printf 'y\n' >"$repo/later.md"
 git -C "$repo" add later.md
 git -C "$repo" commit -q -m "later change"
-if audit; then
-    fail "branch audit missed a migration committed before HEAD~1"
-else
-    pass "branch audit covers every commit since the merge-base"
-fi
-if audit no-such-ref; then status=0; else status=$?; fi
-if [ "$status" -eq 2 ]; then pass "unknown base is a usage error"; else fail "unknown base exited $status" "$log"; fi
+run "$repo/bin/audit"
+expect 1 'migrations/001\.sql' "branch audit covers every commit since the merge-base"
+run "$repo/bin/audit" no-such-ref
+expect 2 'not a commit' "unknown base is rejected"
+git -C "$repo" branch -q -m main trunk
+run "$repo/bin/audit"
+expect 2 'no default branch' "missing default branch is rejected instead of auditing nothing"
+git -C "$repo" branch -q -m trunk main
+
+repo="$work/audit-unrelated"
+new_repo "$repo"
+git -C "$repo" switch -q --orphan feature
+mkdir "$repo/bin"
+cp bin/audit "$repo/bin/audit"
+git -C "$repo" add bin/audit
+git -C "$repo" commit -q -m "unrelated history"
+run "$repo/bin/audit"
+expect 2 'no visible history' "unrelated history is rejected instead of auditing nothing"
 
 echo "[3/4] bind-project.sh"
 proj="$work/bind"
 new_repo "$proj"
-if status_of "$log" ./bind-project.sh "$proj" --runtime all --dev; then
-    if [ -f "$proj/.omp/config.yml" ] && [ -f "$proj/.omp/mcp.json" ] &&
-        grep -qxF "@$ROOT_DIR/.omp/AGENTS.md" "$proj/.omp/AGENTS.md" &&
-        grep -qxF "@$ROOT_DIR/.omp/AGENTS.md" "$proj/CLAUDE.md" &&
-        [ "$(readlink "$proj/.claude/skills/finish-work")" = "$ROOT_DIR/skills/finish-work" ] &&
-        [ ! -e "$proj/.claude/skills/_shared" ]; then
-        pass "binds OMP and Claude Code by reference"
-    else
-        fail "binding files are incomplete"
-    fi
+run ./bind-project.sh "$proj" --runtime all --dev
+if [ "$status" -eq 0 ] && [ -f "$proj/.omp/config.yml" ] && [ -f "$proj/.omp/mcp.json" ] &&
+    grep -qxF "@$ROOT_DIR/.omp/AGENTS.md" "$proj/.omp/AGENTS.md" &&
+    grep -qxF "@$ROOT_DIR/.omp/AGENTS.md" "$proj/CLAUDE.md" &&
+    [ "$(readlink "$proj/.claude/skills/finish-work")" = "$ROOT_DIR/skills/finish-work" ] &&
+    [ ! -e "$proj/.claude/skills/_shared" ]; then
+    pass "binds OMP and Claude Code by reference"
 else
-    fail "bind --dev failed" "$log"
+    fail "binds OMP and Claude Code by reference"
 fi
-before="$(cat "$proj/CLAUDE.md" "$proj/.omp/AGENTS.md")"
-if status_of "$log" ./bind-project.sh "$proj" --runtime all --dev; then
-    fail "second bind overwrote an existing binding"
-elif [ "$(cat "$proj/CLAUDE.md" "$proj/.omp/AGENTS.md")" = "$before" ]; then
-    pass "second bind refuses and leaves files untouched"
+before="$(cat "$proj/CLAUDE.md" "$proj/.omp/AGENTS.md" 2>/dev/null || true)"
+run ./bind-project.sh "$proj" --runtime all --dev
+if [ "$status" -eq 1 ] && [ "$(cat "$proj/CLAUDE.md" "$proj/.omp/AGENTS.md")" = "$before" ]; then
+    pass "a second bind refuses and leaves the binding untouched"
 else
-    fail "second bind modified files before refusing"
+    fail "a second bind refuses and leaves the binding untouched"
 fi
-if git describe --tags --exact-match >/dev/null 2>&1; then
-    echo "  [INFO] HEAD is exactly tagged; release-mode refusal not exercised"
+
+proj="$work/bind-conflict"
+new_repo "$proj"
+printf 'x\n' >"$proj/.claude"
+run ./bind-project.sh "$proj" --runtime all --dev
+if [ "$status" -eq 1 ] && unbound "$proj" && grep -q 'not a directory' "$log"; then
+    pass "a conflicting .claude is refused before anything is written"
 else
-    proj="$work/bind-release"
+    fail "a conflicting .claude is refused before anything is written"
+fi
+
+if [ "$(id -u)" -eq 0 ]; then
+    skip "rollback after a failed bind (root ignores directory permissions)"
+else
+    proj="$work/bind-rollback"
     new_repo "$proj"
-    if status_of "$log" ./bind-project.sh "$proj"; then
-        fail "release mode bound an untagged checkout"
-    elif [ ! -e "$proj/.omp" ]; then
-        pass "release mode refuses an untagged checkout"
+    mkdir -p "$proj/.claude/skills"
+    chmod a-w "$proj/.claude/skills"
+    run ./bind-project.sh "$proj" --runtime all --dev
+    chmod u+w "$proj/.claude/skills"
+    if [ "$status" -ne 0 ] && unbound "$proj"; then
+        pass "a bind that fails midway removes what it created"
     else
-        fail "release mode wrote files before refusing"
+        fail "a bind that fails midway removes what it created"
     fi
 fi
 
+# Release mode, against a tagged copy of this script and a stand-in for gh.
+release="$work/release"
+mkdir -p "$release/.omp" "$release/skills/demo" "$work/fakebin"
+cp bind-project.sh "$release/"
+cp .omp/AGENTS.md .omp/mcp.json "$release/.omp/"
+printf -- '---\nname: demo\ndescription: demo\n---\n' >"$release/skills/demo/SKILL.md"
+git -C "$release" init -q -b main
+git -C "$release" add -A
+git -C "$release" commit -q -m release
+git -C "$release" tag v0.0.0-test
+release_sha="$(git -C "$release" rev-parse HEAD)"
+cat >"$work/fakebin/gh" <<'EOF'
+#!/bin/sh
+# Stand-in for `gh release view`: print $FAKE_RELEASE_BODY, fail when unset.
+[ -n "${FAKE_RELEASE_BODY+set}" ] || exit 1
+printf '%s\n' "$FAKE_RELEASE_BODY"
+EOF
+chmod +x "$work/fakebin/gh"
+release_runs=0
+# release_bind BODY: bind a fresh project from the release checkout while gh
+# reports BODY as the release notes; BODY "-" makes gh fail.
+release_bind() {
+    release_runs=$((release_runs + 1))
+    proj="$work/release-proj-$release_runs"
+    new_repo "$proj"
+    if [ "$1" = - ]; then
+        run env PATH="$work/fakebin:$PATH" "$release/bind-project.sh" "$proj"
+    else
+        run env PATH="$work/fakebin:$PATH" FAKE_RELEASE_BODY="$1" "$release/bind-project.sh" "$proj"
+    fi
+}
+# refused ERE WHAT: the last bind exited 1, wrote nothing and said ERE.
+refused() {
+    if [ "$status" -eq 1 ] && unbound "$proj" && grep -qE -- "$1" "$log"; then
+        pass "$2"
+    else
+        fail "$2"
+    fi
+}
+release_bind "Release commit: $release_sha"
+if [ "$status" -eq 0 ] && grep -qF '`v0.0.0-test`' "$proj/.omp/AGENTS.md"; then
+    pass "release mode binds a verified, clean release"
+else
+    fail "release mode binds a verified, clean release"
+fi
+release_bind "Release commit: $(printf '%040d' 0)"
+refused 'do not record' "release mode refuses notes for another commit"
+release_bind -
+refused 'cannot read GitHub release' "release mode refuses when the release cannot be read"
+printf 'x\n' >"$release/stray"
+release_bind "Release commit: $release_sha"
+refused 'modified, untracked or ignored' "release mode refuses a dirty checkout"
+rm "$release/stray"
+cp "$release/.git/index" "$work/index"
+printf 'corrupt' >"$release/.git/index"
+release_bind "Release commit: $release_sha"
+refused 'cannot read the status' "release mode refuses when Git status fails"
+cp "$work/index" "$release/.git/index"
+git -C "$release" commit -q --allow-empty -m "after the tag"
+release_bind "Release commit: $release_sha"
+refused 'not at an exact release tag' "release mode refuses an untagged checkout"
+
 echo "[4/4] bin/new-project stacks"
-# stack | required tools | formatting break | failing test file | its content
-probe_fmt() {
-    case "$1" in
-        python-uv) printf 'x=1\n' >>"$2/src/app.py" ;;
-        ts-bun) printf 'export const probe  =  1;\n' >>"$2/src/index.ts" ;;
-        go) printf 'var  probe = 1\n' >>"$2/main.go" ;;
-        rust) printf 'fn  probe() {}\n' >>"$2/src/main.rs" ;;
-    esac
-}
-probe_test() {
-    case "$1" in
-        python-uv) printf 'def test_probe() -> None:\n    assert False\n' >"$2/tests/test_probe.py" ;;
-        ts-bun) printf 'import { expect, test } from "bun:test";\ntest("probe", () => expect(1).toBe(2));\n' >"$2/tests/probe.test.ts" ;;
-        go) printf 'package main\n\nimport "testing"\n\nfunc TestProbe(t *testing.T) { t.Fatal("probe") }\n' >"$2/probe_test.go" ;;
-        rust) mkdir -p "$2/tests" && printf '#[test]\nfn probe() {\n    panic!("probe");\n}\n' >"$2/tests/probe.rs" ;;
-    esac
-}
 for stack in python-uv ts-bun go rust; do
+    # src: file the format probes append to; fmt_says: the formatter's report
+    # of a formatting difference; test_says: the runner's report of the probe.
     case "$stack" in
-        python-uv) tools="uv" ;;
-        ts-bun) tools="bun" ;;
-        go) tools="go gofmt" ;;
-        rust) tools="cargo" ;;
+        python-uv)
+            tools="uv"
+            src=src/app.py
+            unformatted='x=1'
+            unparsable='def ('
+            fmt_says='File would be reformatted'
+            probe_file=tests/test_probe.py
+            probe=$'def test_probe() -> None:\n    assert False\n'
+            test_says='FAILED tests/test_probe\.py::test_probe'
+            ;;
+        ts-bun)
+            tools="bun"
+            src=src/index.ts
+            unformatted='export const probe  =  1;'
+            unparsable='export const = ;'
+            fmt_says='Formatter would have printed'
+            probe_file=tests/probe.test.ts
+            probe=$'import { expect, test } from "bun:test";\ntest("probe", () => expect(1).toBe(2));\n'
+            test_says='\(fail\) probe'
+            ;;
+        go)
+            tools="go gofmt"
+            src=main.go
+            unformatted='var  probe = 1'
+            unparsable='func ('
+            fmt_says='^main\.go$'
+            probe_file=probe_test.go
+            probe=$'package main\n\nimport "testing"\n\nfunc TestProbe(t *testing.T) { t.Fatal("probe") }\n'
+            test_says='--- FAIL: TestProbe'
+            ;;
+        rust)
+            tools="cargo"
+            src=src/main.rs
+            unformatted='fn  probe() {}'
+            unparsable='fn ('
+            fmt_says='^Diff in .*src/main\.rs'
+            probe_file=tests/probe.rs
+            probe=$'#[test]\nfn probe() {\n    panic!("probe");\n}\n'
+            test_says='test probe \.\.\. FAILED'
+            ;;
     esac
     missing=""
     for tool in $tools; do
@@ -180,37 +312,35 @@ for stack in python-uv ts-bun go rust; do
     fi
 
     dir="$work/proj-$stack"
-    if ! status_of "$log" ./bin/new-project "$dir" --stack "$stack" --runtime omp; then
-        fail "$stack: new-project failed" "$log"
+    run ./bin/new-project "$dir" --stack "$stack" --runtime omp
+    if [ "$status" -ne 0 ]; then
+        fail "$stack: new-project"
         continue
     fi
-    if status_of "$log" make -C "$dir" setup && status_of "$log" make -C "$dir" check &&
-        status_of "$log" make -C "$dir" seed; then
-        pass "$stack: setup, check and seed pass"
-    else
-        fail "$stack: scaffold gates failed" "$log"
+    run make -C "$dir" setup
+    [ "$status" -ne 0 ] || run make -C "$dir" check
+    [ "$status" -ne 0 ] || run make -C "$dir" demo
+    if [ "$status" -ne 0 ]; then
+        fail "$stack: setup, check and demo"
         continue
     fi
-    if status_of "$log" "$dir/bin/doctor"; then
-        pass "$stack: doctor HEALTHY"
-    else
-        fail "$stack: doctor failed" "$log"
-    fi
+    pass "$stack: setup, check and demo pass"
+    run "$dir/bin/doctor"
+    expect 0 'Doctor: HEALTHY' "$stack: doctor HEALTHY"
 
-    # The gates must actually fail on broken code.
-    probe_fmt "$stack" "$dir"
-    if status_of "$log" make -C "$dir" fmt-check; then
-        fail "$stack: fmt-check passed unformatted code"
-    else
-        pass "$stack: fmt-check rejects unformatted code"
-    fi
+    # The gates must fail on broken code, and for the intended reason.
+    printf '%s\n' "$unformatted" >>"$dir/$src"
+    run make -C "$dir" fmt-check
+    expect_failure "$fmt_says" "$stack: fmt-check reports unformatted code"
     git -C "$dir" checkout -q -- .
-    probe_test "$stack" "$dir"
-    if status_of "$log" make -C "$dir" test; then
-        fail "$stack: test passed a failing test"
-    else
-        pass "$stack: test rejects a failing test"
-    fi
+    printf '%s\n' "$unparsable" >>"$dir/$src"
+    run make -C "$dir" fmt-check
+    expect_failure "$(basename "$src")" "$stack: fmt-check fails when the formatter cannot parse"
+    git -C "$dir" checkout -q -- .
+    mkdir -p "$(dirname "$dir/$probe_file")"
+    printf '%s' "$probe" >"$dir/$probe_file"
+    run make -C "$dir" test
+    expect_failure "$test_says" "$stack: test reports the failing test"
 done
 
 echo "-------------------------------------------------------"
