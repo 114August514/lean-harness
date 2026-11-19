@@ -64,8 +64,9 @@ fi
 echo "=== Lean Harness Change Audit ==="
 echo "Base: $base"
 
-tracked="$(git diff --name-only "$base")" || no_base "cannot diff against $base"
-untracked="$(git ls-files --others --exclude-standard)"
+# -z prints real paths; Git would otherwise quote names with non-ASCII characters.
+tracked="$(git diff --name-only -z "$base" | tr '\0' '\n')" || no_base "cannot diff against $base"
+untracked="$(git ls-files -z --others --exclude-standard | tr '\0' '\n')"
 changed="$(printf '%s\n%s\n' "$tracked" "$untracked" | sed '/^$/d' | sort -u)"
 if [ -z "$changed" ]; then
     echo "No changes against the base."
@@ -80,12 +81,13 @@ show() {
     printf '%s\n' "$1" | sed -n '1,10s/^/    /p'
 }
 
-# Untracked text files whose path matches the ERE $1, every line prefixed
-# with "+" like the added lines of a diff.
+# Untracked regular text files (not symlinks) whose path matches the ERE $1,
+# every line prefixed with "+" like the added lines of a diff.
 untracked_as_added() {
     local file
     while IFS= read -r file; do
-        if [ -n "$file" ] && [[ $file =~ $1 ]] && [ -f "./$file" ] && grep -Iq . "./$file"; then
+        if [ -n "$file" ] && [[ $file =~ $1 ]] && [ -f "./$file" ] && [ ! -L "./$file" ] &&
+            grep -Iq . "./$file"; then
             sed 's/^/+/' "./$file"
         fi
     done <<<"$untracked"
