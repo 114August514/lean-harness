@@ -1,80 +1,128 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# Bind a project to this Lean Harness checkout. The binding only references
+# the checkout; it never copies policy, skills, continuity or Git rules.
+# Requires Linux with GNU coreutils (mv -T -n).
+set -eu
 
 REPOSITORY="114August514/lean-harness"
 
-release_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-project_root="."
-RUNTIME="omp"
-FORCE=false
-DEV_MODE=false
-
 usage() {
-    cat <<EOF
-Usage: ./bind-project.sh [PROJECT_DIR] [OPTIONS]
+    cat <<'EOF'
+Usage: bind-project.sh [PROJECT_DIR] [--runtime omp|claude|all] [--dev]
 
-Options:
-  --runtime <omp|claude|all>   Target runtime to bind (default: omp)
-  --dev                        Bind directly from local dev checkout (bypasses git tag check)
-  --force                      Overwrite existing configuration
-  -h, --help                   Show this help message
+Bind PROJECT_DIR (default: current directory) to this Lean Harness checkout.
+
+  --runtime omp     write .omp/{config.yml,AGENTS.md,mcp.json} (default)
+  --runtime claude  write CLAUDE.md that imports the Harness entry and link
+                    the Harness skills into .claude/skills/
+  --runtime all     both
+  --dev             bind a development checkout: skip the exact-tag, GitHub
+                    release and clean-checkout verification
+
+Without --dev the checkout must sit on an exact release tag whose GitHub
+release notes contain "Release commit: <full sha>" for that commit, and it
+must contain no modified, untracked or ignored files. Existing bindings are
+never overwritten.
 EOF
-    exit 0
 }
 
+die() {
+    printf 'error: %s\n' "$*" >&2
+    exit 1
+}
+
+runtime=omp
+dev=false
+project_arg=
 while [ $# -gt 0 ]; do
     case "$1" in
         --runtime)
-            RUNTIME="$2"
+            [ $# -ge 2 ] || die "--runtime needs a value"
+            runtime=$2
             shift 2
             ;;
         --dev)
-            DEV_MODE=true
+            dev=true
             shift
             ;;
-        --force)
-            FORCE=true
-            shift
-            ;;
-        -h|--help)
+        -h | --help)
             usage
+            exit 0
             ;;
         -*)
-            echo "Unknown option: $1" >&2
-            exit 1
+            die "unknown option: $1"
             ;;
         *)
-            project_root="$(cd "$1" && pwd -P)"
+            [ -z "$project_arg" ] || die "more than one project directory given"
+            project_arg=$1
             shift
             ;;
     esac
 done
 
-release_commit="$(git -C "$release_root" rev-parse --verify "HEAD^{commit}" 2>/dev/null || echo "unknown")"
-release_tag="$(git -C "$release_root" describe --tags --exact-match 2>/dev/null || echo "dev-${release_commit:0:8}")"
+want_omp=false
+want_claude=false
+case "$runtime" in
+    omp) want_omp=true ;;
+    claude) want_claude=true ;;
+    all)
+        want_omp=true
+        want_claude=true
+        ;;
+    *) die "unknown runtime: $runtime (expected omp, claude or all)" ;;
+esac
 
-if [ "$DEV_MODE" = false ] && [ "$release_tag" != dev-* ]; then
-    if command -v gh >/dev/null 2>&1; then
-        release_body="$(gh release view "$release_tag" --repo "$REPOSITORY" --json body --jq .body 2>/dev/null || true)"
-        expected_commit="$(printf '%s\n' "$release_body" | sed -n 's/^Release commit: \([0-9a-f]\{40\}\)$/\1/p')"
-        if [ -n "$expected_commit" ] && [ "$expected_commit" != "$release_commit" ]; then
-            printf 'error: release commit mismatch for %s\n' "$release_tag" >&2
-            exit 1
-        fi
-    fi
+release_root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+project_root=$(CDPATH='' cd -- "${project_arg:-.}" && pwd -P)
+release_commit=$(git -C "$release_root" rev-parse --verify "HEAD^{commit}")
+
+if [ "$dev" = true ]; then
+    release_label="dev-$(printf '%s' "$release_commit" | cut -c1-12)"
+else
+    release_label=$(git -C "$release_root" describe --tags --exact-match 2>/dev/null) ||
+        die "Lean Harness checkout is not at an exact release tag; check out a release or pass --dev"
+    command -v gh >/dev/null 2>&1 || die "gh is required to verify release $release_label"
+    release_body=$(gh release view "$release_label" --repo "$REPOSITORY" --json body --jq .body) ||
+        die "cannot read GitHub release $release_label"
+    expected_commit=$(printf '%s\n' "$release_body" | sed -n 's/^Release commit: \([0-9a-f]\{40\}\)$/\1/p')
+    [ "$expected_commit" = "$release_commit" ] ||
+        die "release notes of $release_label do not record this checkout's commit $release_commit"
+    [ -z "$(git -C "$release_root" status --porcelain --untracked-files=all --ignored=matching)" ] ||
+        die "release checkout contains modified, untracked or ignored files"
 fi
 
-escaped_root=$(printf '%s' "$release_root" | sed 's/\\/\\\\/g; s/"/\\"/g')
-
-# 1. Bind OMP
-bind_omp() {
-    local binding_dir="$project_root/.omp"
-    if [ -e "$binding_dir" ] && [ "$FORCE" = false ]; then
-        printf 'warning: %s already exists; use --force to overwrite\n' "$binding_dir" >&2
-        return 0
+# Refuse before writing anything.
+if [ "$want_omp" = true ] && [ -e "$project_root/.omp" ]; then
+    die "$project_root/.omp already exists; merge the Harness binding into it by hand"
+fi
+if [ "$want_claude" = true ]; then
+    if [ -e "$project_root/CLAUDE.md" ]; then
+        die "$project_root/CLAUDE.md already exists; add the line @$release_root/.omp/AGENTS.md to it by hand"
     fi
-    mkdir -p "$binding_dir"
-    cat >"$binding_dir/config.yml" <<EOF
+    for skill in "$release_root"/skills/*/; do
+        name=$(basename "$skill")
+        if [ "$name" = _shared ]; then
+            continue
+        fi
+        if [ -e "$project_root/.claude/skills/$name" ] || [ -L "$project_root/.claude/skills/$name" ]; then
+            die "$project_root/.claude/skills/$name already exists"
+        fi
+    done
+fi
+
+header="Lean Harness root: \`$release_root\`.
+Lean Harness release: \`$release_label\` at \`$release_commit\`."
+footer="## This project
+
+Read this project's README and existing repository documentation for project-specific context."
+
+publish_omp() {
+    escaped_root=$(printf '%s' "$release_root" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    temporary_dir="$project_root/.omp.lean-harness.$$"
+    mkdir "$temporary_dir" || die "cannot create $temporary_dir"
+    trap 'rm -rf -- "$temporary_dir"' EXIT HUP INT TERM
+
+    cat >"$temporary_dir/config.yml" <<EOF
 skills:
   customDirectories:
     - "$escaped_root/skills"
@@ -97,79 +145,54 @@ github:
   enabled: false
 EOF
 
-    cat >"$binding_dir/AGENTS.md" <<EOF
-# Project Context
+    cat >"$temporary_dir/AGENTS.md" <<EOF
+# Project context
 
-Lean Harness root: \`$release_root\`.
-Lean Harness release: \`$release_tag\` at \`$release_commit\`.
+$header
 
 @$release_root/.omp/AGENTS.md
 
-## Standard Project Commands
-- \`make check\`   : Pre-commit gate (tests, linter, formatting)
-- \`make test\`    : Run test suite
-- \`make doctor\`  : Check engineering baseline
-- \`make audit\`   : Check change diff for high-risk boundaries
+$footer
 EOF
 
-    if [ -f "$release_root/.omp/mcp.json" ]; then
-        cp "$release_root/.omp/mcp.json" "$binding_dir/mcp.json"
-    fi
-    printf 'Bound OMP runtime: %s\n' "$binding_dir"
+    # OMP reads MCP servers only from the project's .omp/, so this one file is copied.
+    cp "$release_root/.omp/mcp.json" "$temporary_dir/mcp.json"
+
+    mv -T -n -- "$temporary_dir" "$project_root/.omp" || die "cannot publish $project_root/.omp"
+    [ ! -e "$temporary_dir" ] || die "$project_root/.omp was created concurrently; left it untouched"
+    trap - EXIT HUP INT TERM
+    printf 'Bound OMP: %s/.omp\n' "$project_root"
 }
 
-# 2. Bind Claude Code
-bind_claude() {
-    local claude_skills_dir="$project_root/.claude/skills"
-    mkdir -p "$claude_skills_dir"
-
-    # Link skills
-    for skill_path in "$release_root"/skills/*; do
-        if [ -d "$skill_path" ] && [ "$(basename "$skill_path")" != "_shared" ]; then
-            local skill_name="$(basename "$skill_path")"
-            ln -sfn "$skill_path" "$claude_skills_dir/$skill_name"
+publish_claude() {
+    mkdir -p "$project_root/.claude/skills"
+    for skill in "$release_root"/skills/*/; do
+        name=$(basename "$skill")
+        if [ "$name" = _shared ]; then
+            continue
         fi
+        ln -s -- "${skill%/}" "$project_root/.claude/skills/$name"
     done
+    (
+        set -C
+        cat >"$project_root/CLAUDE.md" <<EOF
+# Project context
 
-    # Generate or append to CLAUDE.md
-    local claude_md="$project_root/CLAUDE.md"
-    if [ ! -f "$claude_md" ] || [ "$FORCE" = true ]; then
-        cat >"$claude_md" <<EOF
-# Project Development Guide (Powered by Lean Harness)
+$header
+Harness skills are linked into \`.claude/skills/\`.
 
-## Core Engineering Rules
-- **Search Before Writing**: Always search existing files and libraries first (\`git grep\`). Never duplicate logic.
-- **Fail-to-Pass (TDD)**: Write a failing test first, verify failure, write minimal fix, verify pass.
-- **Standard Verbs**:
-  - \`make check\`  : Always run before declaring task complete.
-  - \`make test\`   : Run test suite.
-  - \`make doctor\` : Check repo health.
-  - \`make audit\`  : Audit diff for risks.
+@$release_root/.omp/AGENTS.md
 
-## High-Risk Boundaries
-- Migrations & Schema changes require an undo plan.
-- Never hand-roll cryptography, date-time/timezones, or CSV/URL parsers.
+$footer
 EOF
-        printf 'Created %s\n' "$claude_md"
-    fi
-    printf 'Bound Claude Code runtime: %s\n' "$claude_skills_dir"
+    ) || die "cannot create $project_root/CLAUDE.md"
+    printf 'Bound Claude Code: %s/CLAUDE.md and %s/.claude/skills\n' "$project_root" "$project_root"
 }
 
-case "$RUNTIME" in
-    omp)
-        bind_omp
-        ;;
-    claude)
-        bind_claude
-        ;;
-    all)
-        bind_omp
-        bind_claude
-        ;;
-    *)
-        printf 'error: unknown runtime %s\n' "$RUNTIME" >&2
-        exit 1
-        ;;
-esac
-
-printf 'Success: Bound Lean Harness (%s) to %s (runtime: %s)\n' "$release_tag" "$project_root" "$RUNTIME"
+if [ "$want_omp" = true ]; then
+    publish_omp
+fi
+if [ "$want_claude" = true ]; then
+    publish_claude
+fi
+printf 'Lean Harness %s (%s) bound to %s\n' "$release_label" "$release_commit" "$project_root"

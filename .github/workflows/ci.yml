@@ -10,18 +10,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # bin/audit diffs against the base commit
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v5
 
-      - name: Install dependencies
-        run: uv sync --frozen --group dev || uv sync --group dev || true
+      # Toolchains for the stack templates exercised by tests/test_tooling.sh.
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Doctor Baseline Check
-        run: make doctor
+      - run: uv sync --frozen --group dev
 
-      - name: Standard Gate Check (Unit Tests, Tooling Scaffolding Tests, Lint, Format)
-        run: make check
+      - run: make doctor
 
-      - name: Automated Change Audit
-        run: make audit
+      - run: make check
+
+      - name: Continuity CLI smoke test
+        run: |
+          uv run python -m compileall -q continuity/continuity
+          tmp="$(mktemp -d)"
+          git -C "$tmp" init -q -b main
+          cd continuity
+          uv run python -m continuity --repo "$tmp" recovery status | grep -q '"binding": null'
+
+      - name: Change audit
+        run: make audit BASE="${{ github.event.pull_request.base.sha || github.event.before }}"

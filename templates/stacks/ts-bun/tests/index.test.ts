@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
-import { add, loadSeeds } from "../src/index";
+import { loadSeeds } from "../src/index";
 
-test("tracer add works", () => {
-  expect(add(1, 2)).toBe(3);
+test("loadSeeds reads items", () => {
+	expect(loadSeeds('[{"id": "a", "title": "A"}]')).toEqual([
+		{ id: "a", title: "A" },
+	]);
 });
 
-test("tracer loadSeeds returns array", () => {
-  expect(Array.isArray(loadSeeds())).toBe(true);
+test("loadSeeds rejects a non-array document", () => {
+	expect(() => loadSeeds('{"id": "a"}')).toThrow();
 });

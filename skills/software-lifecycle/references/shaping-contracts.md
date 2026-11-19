@@ -1,7 +1,7 @@
 # Stage 1–2：需求塑形、领域语言与架构契约
 
-本参考沿用 [`workflow/lifecycle.md`](../../../workflow/lifecycle.md) 的 Stage 1「需求塑形与定界」
-和 Stage 2「契约与不可逆决策」。文档格式由 `skill://project-docs` 负责；这里关注内容质量。
+本参考对应 [SKILL.md](../SKILL.md) 的 Stage 1「需求塑形与定界」和 Stage 2「契约与不可逆决策」。
+文档格式由 `skill://project-docs` 负责；这里关注内容质量。
 SWEBOK v4 把需求获取、分析、规格、验证、变更管理，以及架构的重要决策与视图分别列为核心活动；
 这些活动是可迭代的，不意味着先写完一套大文档再编码。
 

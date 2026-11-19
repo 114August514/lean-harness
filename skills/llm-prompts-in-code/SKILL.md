@@ -6,8 +6,7 @@ description: >-
 
 # 程序内 Prompt 工程
 
-这项技能关注的是“把 Prompt 当成软件契约长期维护”，不替代
-`skill://implement-change`、`skill://verify-work`、`skill://review-work` 的工作流程。
+这项技能关注的是“把 Prompt 当成软件契约长期维护”，不规定工作流程。
 
 ## 何时使用
 
