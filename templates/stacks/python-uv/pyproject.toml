@@ -7,9 +7,13 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "mypy>=1.10",
     "pytest>=8.0",
     "ruff>=0.12",
 ]
+
+[tool.uv]
+package = false
 
 [tool.ruff]
 line-length = 88
@@ -17,4 +21,3 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]

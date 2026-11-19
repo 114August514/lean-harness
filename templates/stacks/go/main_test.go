@@ -2,15 +2,18 @@ package main
 
 import "testing"
 
-func TestAdd(t *testing.T) {
-	if Add(1, 2) != 3 {
-		t.Errorf("Expected 3, got %d", Add(1, 2))
+func TestLoadSeedsReadsItems(t *testing.T) {
+	items, err := LoadSeeds([]byte(`[{"id": "a", "title": "A"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "a" || items[0].Title != "A" {
+		t.Fatalf("unexpected items: %+v", items)
 	}
 }
 
-func TestLoadSeeds(t *testing.T) {
-	seeds := LoadSeeds()
-	if seeds == nil {
-		t.Log("No seeds loaded or empty, ok for unit test.")
+func TestLoadSeedsRejectsNonArray(t *testing.T) {
+	if _, err := LoadSeeds([]byte(`{"id": "a"}`)); err == nil {
+		t.Fatal("expected an error for a non-array document")
 	}
 }
