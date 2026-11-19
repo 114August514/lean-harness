@@ -1,8 +1,7 @@
 # Stage 3–4：工程骨架、垂直切片与测试策略
 
-本参考沿用 [`workflow/lifecycle.md`](../../../workflow/lifecycle.md) 的 Stage 3「发射曳光弹骨架」
-与 Stage 4「垂直切片与自愈闭环」。执行闭环用 `skill://implement-change`，验证用
-`skill://verify-work`；这里定义产物质量。
+本参考对应 [SKILL.md](../SKILL.md) 的 Stage 3「发射曳光弹骨架」与 Stage 4「垂直切片与 TDD」，
+只定义产物质量；实现与验证按项目自己的流程进行。
 
 ## Stage 3：发射曳光弹骨架
 
@@ -106,7 +105,7 @@ SWEBOK 区分 unit、integration、system、acceptance 等测试层级，并列�
 
 测试应断言公共、可观察行为。避免大量断言私有调用顺序、全靠 mock 自证、无断言 smoke test、
 或为了覆盖率给无风险 glue code 补同义反复。每个重要变化都需要验证，但并非每个变化都值得
-新增永久测试；遵循 `policy/working-contract.md` 的测试与验证边界。
+新增永久测试。
 
 外部网络在测试中隔离：协议 fake、录制样本和本地测试容器应固定输入；不能用 sleep 猜异步完成。
 

@@ -1,7 +1,7 @@
 # <能力 / 项目名> 规格
 
-> 本模板用于没有既有格式的项目。Lean Harness 骨架项目继续使用
-> `templates/project-skeleton/docs/spec.md`，不要覆盖。
+> 本模板用于没有既有格式的项目。由 Lean Harness 脚手架生成的项目继续使用
+> 自带的 `docs/spec.md`，不要覆盖。
 
 ## 问题与用户
 

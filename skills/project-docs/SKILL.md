@@ -10,8 +10,8 @@ description: >-
 # 项目文档
 
 让每份文档回答一个稳定的问题；按真实读者和风险增减，而不是给每个仓库铺满模板。
-本 skill 只管“写什么、放哪里、怎样写清楚”。执行工作仍用 `implement-change`，
-交付验证仍用 `finish-work`；仓库级协作规则以 `policy/` 为准，不在文档中复制一套。
+本 skill 只管“写什么、放哪里、怎样写清楚”，不规定工作流程；仓库级协作规则写在仓库自己的
+规则文件里（如 AGENTS.md、`policy/`），不在文档中复制一套。
 
 ## 何时使用
 
@@ -63,13 +63,13 @@ description: >-
 4. **runbook 的步骤要可执行。** 值班者需要命令、前置条件、成功信号和回退，而不是“按常规恢复”。
 5. **面向使用者记录 notable changes。** CHANGELOG 与 commit history 的读者和粒度不同。
 6. **注释解释契约、约束和反直觉原因。** 如果只是复述语句，优先改名或重构代码。
-7. **AGENTS.md 只写项目事实。** 保留真实命令、局部约束和文档指针；通用流程链接 `policy/` 或相关 skill。
+7. **AGENTS.md 只写项目事实。** 保留真实命令、局部约束和文档指针；通用流程链接仓库已有的规则文件或相关 skill。
 8. **库 API 与版本相关的写法先查真实文档。** 优先用 Context7 MCP 的 `resolve-library-id`、`query-docs`，不要凭记忆写参数或示例；临时 Python 文档工具用 `uv run --with`。
 
-## 与本仓库骨架的关系
+## 与 Lean Harness 骨架的关系
 
-Harness 根目录下的 `templates/project-skeleton/docs/spec.md` 是 Lean Harness 的 shaping 与垂直切片契约，
-`templates/project-skeleton/docs/walkthrough.md` 是阶段交付/无人值守验收记录（脚手架生成项目时复制为项目的 `docs/`）；已有项目使用它们时继续沿用，
+由 Lean Harness `bin/new-project` 生成的项目带有 `docs/spec.md`（shaping 与垂直切片跟踪）和
+`docs/walkthrough.md`（阶段交付与无人值守验收记录）。项目在用它们时继续沿用，
 不要用本 skill 的通用 `templates/spec.md` 覆盖，也不要把 walkthrough 改造成 ADR 或 CHANGELOG。
 
 ## 自检

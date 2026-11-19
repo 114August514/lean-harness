@@ -45,7 +45,7 @@ Fowler 与 Sadalage 的 evolutionary database design 要点包括：所有数据
 ```
 
 双写不是永久架构；必须有收缩条件。若生产者、消费者和数据库都未形成真实外部依赖且可一次更新，
-按 `policy/working-contract.md` 直接改完并收敛，不制造无意义的过渡期。
+直接改完并收敛，不制造无意义的过渡期。
 
 大表 migration 注意锁时间和事务体积：避免一次回填全部行；分批、可续跑，并观察复制延迟和错误。
 具体 DDL 锁行为与 migration API 强依赖数据库/框架版本，查官方文档或 Context7，不凭通用经验猜。

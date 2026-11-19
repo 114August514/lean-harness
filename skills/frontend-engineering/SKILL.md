@@ -6,8 +6,7 @@ description: >-
 
 # 前端工程
 
-这项 skill 说明“可用、可维护的界面应是什么样”，不替代 `implement-change`、
-`verify-work`、`review-work` 等工作流程。视觉方向、字体与审美表达交给
+这项 skill 说明“可用、可维护的界面应是什么样”，不规定工作流程。视觉方向、字体与审美表达交给
 [`frontend-design`](skill://frontend-design)；接口生产端的契约、鉴权和幂等性交给
 [`backend-engineering`](skill://backend-engineering)。
 
@@ -20,7 +19,7 @@ description: >-
 - Agent 写完 UI 后，需要获得“真实渲染结果”而不是只读源码。
 
 不用于纯视觉探索；那是 `frontend-design`。不在这里重复需求对齐、实现、验证、评审和
-收尾流程；遵循仓库 `policy/` 与相应 process skill。
+收尾流程；按仓库自己的规则和流程进行。
 
 ## 场景路由
 
