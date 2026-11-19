@@ -1,7 +1,7 @@
 #!/bin/sh
 # Bind a project to this Lean Harness checkout. The binding only references
 # the checkout; it never copies policy, skills, continuity or Git rules.
-# Requires Linux with GNU coreutils (mv -T -n).
+# Requires Linux coreutils with mktemp -d, mv -T -n and ln -T.
 set -eu
 
 REPOSITORY="114August514/lean-harness"
@@ -21,14 +21,19 @@ Bind PROJECT_DIR (default: current directory) to this Lean Harness checkout.
 
 Without --dev the checkout must sit on an exact release tag whose GitHub
 release notes contain "Release commit: <full sha>" for that commit, and it
-must contain no modified, untracked or ignored files. Existing bindings are
-never overwritten.
+must contain no modified, untracked or ignored files. Existing files are
+never overwritten, and a run that fails removes what it created.
 EOF
 }
 
 die() {
     printf 'error: %s\n' "$*" >&2
     exit 1
+}
+
+# True when $1 exists, including as a dangling symlink.
+exists() {
+    [ -e "$1" ] || [ -L "$1" ]
 }
 
 runtime=omp
@@ -73,8 +78,10 @@ case "$runtime" in
 esac
 
 release_root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
-project_root=$(CDPATH='' cd -- "${project_arg:-.}" && pwd -P)
-release_commit=$(git -C "$release_root" rev-parse --verify "HEAD^{commit}")
+project_root=$(CDPATH='' cd -- "${project_arg:-.}" && pwd -P) ||
+    die "project directory not found: ${project_arg:-.}"
+release_commit=$(git -C "$release_root" rev-parse --verify "HEAD^{commit}") ||
+    die "$release_root is not a Git checkout"
 
 if [ "$dev" = true ]; then
     release_label="dev-$(printf '%s' "$release_commit" | cut -c1-12)"
@@ -85,30 +92,82 @@ else
     release_body=$(gh release view "$release_label" --repo "$REPOSITORY" --json body --jq .body) ||
         die "cannot read GitHub release $release_label"
     expected_commit=$(printf '%s\n' "$release_body" | sed -n 's/^Release commit: \([0-9a-f]\{40\}\)$/\1/p')
-    [ "$expected_commit" = "$release_commit" ] ||
+    if [ "$expected_commit" != "$release_commit" ]; then
         die "release notes of $release_label do not record this checkout's commit $release_commit"
-    [ -z "$(git -C "$release_root" status --porcelain --untracked-files=all --ignored=matching)" ] ||
+    fi
+    release_status=$(git -C "$release_root" status --porcelain --untracked-files=all --ignored=matching) ||
+        die "cannot read the status of the release checkout"
+    if [ -n "$release_status" ]; then
         die "release checkout contains modified, untracked or ignored files"
+    fi
 fi
 
+# Names of the Harness skills linked for Claude Code.
+skill_names() {
+    for skill in "$release_root"/skills/*/; do
+        name=$(basename "$skill")
+        if [ -d "$skill" ] && [ "$name" != _shared ]; then
+            printf '%s\n' "$name"
+        fi
+    done
+}
+
 # Refuse before writing anything.
-if [ "$want_omp" = true ] && [ -e "$project_root/.omp" ]; then
+if [ "$want_omp" = true ] && exists "$project_root/.omp"; then
     die "$project_root/.omp already exists; merge the Harness binding into it by hand"
 fi
 if [ "$want_claude" = true ]; then
-    if [ -e "$project_root/CLAUDE.md" ]; then
+    if exists "$project_root/CLAUDE.md"; then
         die "$project_root/CLAUDE.md already exists; add the line @$release_root/.omp/AGENTS.md to it by hand"
     fi
-    for skill in "$release_root"/skills/*/; do
-        name=$(basename "$skill")
-        if [ "$name" = _shared ]; then
-            continue
+    for dir in "$project_root/.claude" "$project_root/.claude/skills"; do
+        if exists "$dir" && [ ! -d "$dir" ]; then
+            die "$dir exists and is not a directory"
         fi
-        if [ -e "$project_root/.claude/skills/$name" ] || [ -L "$project_root/.claude/skills/$name" ]; then
+    done
+    for name in $(skill_names); do
+        if exists "$project_root/.claude/skills/$name"; then
             die "$project_root/.claude/skills/$name already exists"
         fi
     done
 fi
+
+# Everything below is staged first, then moved into place. Whatever this run
+# created is removed again unless the run completes.
+staging=
+completed=false
+created_omp=false
+created_claude_md=false
+created_claude_dir=false
+created_skills_dir=false
+created_links=
+
+cleanup() {
+    if [ -n "$staging" ]; then rm -rf -- "$staging" || :; fi
+    if [ "$completed" = true ]; then return 0; fi
+    if [ "$created_omp" = true ]; then rm -rf -- "$project_root/.omp" || :; fi
+    if [ "$created_claude_md" = true ]; then rm -f -- "$project_root/CLAUDE.md" || :; fi
+    for name in $created_links; do
+        rm -f -- "$project_root/.claude/skills/$name" || :
+    done
+    if [ "$created_skills_dir" = true ]; then rmdir -- "$project_root/.claude/skills" 2>/dev/null || :; fi
+    if [ "$created_claude_dir" = true ]; then rmdir -- "$project_root/.claude" 2>/dev/null || :; fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Move a staged file or directory to $2 unless something already exists there.
+publish() {
+    if mv -T -n -- "$1" "$2" && ! exists "$1"; then
+        return 0
+    fi
+    die "$2 appeared while binding; left it untouched"
+}
+
+staging=$(mktemp -d "$project_root/.lean-harness-bind.XXXXXX") ||
+    die "cannot create a staging directory in $project_root"
 
 header="Lean Harness root: \`$release_root\`.
 Lean Harness release: \`$release_label\` at \`$release_commit\`."
@@ -116,13 +175,10 @@ footer="## This project
 
 Read this project's README and existing repository documentation for project-specific context."
 
-publish_omp() {
+if [ "$want_omp" = true ]; then
     escaped_root=$(printf '%s' "$release_root" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    temporary_dir="$project_root/.omp.lean-harness.$$"
-    mkdir "$temporary_dir" || die "cannot create $temporary_dir"
-    trap 'rm -rf -- "$temporary_dir"' EXIT HUP INT TERM
-
-    cat >"$temporary_dir/config.yml" <<EOF
+    mkdir "$staging/omp"
+    cat >"$staging/omp/config.yml" <<EOF
 skills:
   customDirectories:
     - "$escaped_root/skills"
@@ -144,8 +200,7 @@ task:
 github:
   enabled: false
 EOF
-
-    cat >"$temporary_dir/AGENTS.md" <<EOF
+    cat >"$staging/omp/AGENTS.md" <<EOF
 # Project context
 
 $header
@@ -154,28 +209,12 @@ $header
 
 $footer
 EOF
-
     # OMP reads MCP servers only from the project's .omp/, so this one file is copied.
-    cp "$release_root/.omp/mcp.json" "$temporary_dir/mcp.json"
+    cp -- "$release_root/.omp/mcp.json" "$staging/omp/mcp.json"
+fi
 
-    mv -T -n -- "$temporary_dir" "$project_root/.omp" || die "cannot publish $project_root/.omp"
-    [ ! -e "$temporary_dir" ] || die "$project_root/.omp was created concurrently; left it untouched"
-    trap - EXIT HUP INT TERM
-    printf 'Bound OMP: %s/.omp\n' "$project_root"
-}
-
-publish_claude() {
-    mkdir -p "$project_root/.claude/skills"
-    for skill in "$release_root"/skills/*/; do
-        name=$(basename "$skill")
-        if [ "$name" = _shared ]; then
-            continue
-        fi
-        ln -s -- "${skill%/}" "$project_root/.claude/skills/$name"
-    done
-    (
-        set -C
-        cat >"$project_root/CLAUDE.md" <<EOF
+if [ "$want_claude" = true ]; then
+    cat >"$staging/CLAUDE.md" <<EOF
 # Project context
 
 $header
@@ -185,14 +224,32 @@ Harness skills are linked into \`.claude/skills/\`.
 
 $footer
 EOF
-    ) || die "cannot create $project_root/CLAUDE.md"
-    printf 'Bound Claude Code: %s/CLAUDE.md and %s/.claude/skills\n' "$project_root" "$project_root"
-}
+fi
 
 if [ "$want_omp" = true ]; then
-    publish_omp
+    publish "$staging/omp" "$project_root/.omp"
+    created_omp=true
+    printf 'Bound OMP: %s/.omp\n' "$project_root"
 fi
+
 if [ "$want_claude" = true ]; then
-    publish_claude
+    if ! exists "$project_root/.claude"; then
+        mkdir -- "$project_root/.claude"
+        created_claude_dir=true
+    fi
+    if ! exists "$project_root/.claude/skills"; then
+        mkdir -- "$project_root/.claude/skills"
+        created_skills_dir=true
+    fi
+    for name in $(skill_names); do
+        # -T: fail instead of creating the link inside a directory that appeared meanwhile.
+        ln -s -T -- "$release_root/skills/$name" "$project_root/.claude/skills/$name"
+        created_links="$created_links $name"
+    done
+    publish "$staging/CLAUDE.md" "$project_root/CLAUDE.md"
+    created_claude_md=true
+    printf 'Bound Claude Code: %s/CLAUDE.md and %s/.claude/skills\n' "$project_root" "$project_root"
 fi
+
+completed=true
 printf 'Lean Harness %s (%s) bound to %s\n' "$release_label" "$release_commit" "$project_root"
