@@ -24,7 +24,7 @@ help:
 	@echo ""
 	@echo "Engineering Inspection:"
 	@echo "  make doctor     - Run baseline project health check"
-	@echo "  make audit      - Scan git diff for high-risk changes & anti-patterns"
+	@echo "  make audit      - Scan the branch's changes for high-risk signals (BASE=<ref> to choose the base)"
 	@echo "  make setup      - Install dependencies and prepare environment"
 
 setup:
@@ -65,7 +65,7 @@ check: test lint typecheck fmt-check
 	@echo "==> ALL CHECKS PASSED. Clean and ready for commit."
 
 doctor:
-	@if [ -x "./bin/doctor" ]; then ./bin/doctor; else echo "No custom doctor script."; fi
+	./bin/doctor
 
 audit:
-	@if [ -x "./bin/audit" ]; then ./bin/audit; else git diff --stat HEAD~1; fi
+	./bin/audit $(BASE)

@@ -83,7 +83,8 @@ TARGET_DIR="$(mkdir -p "$TARGET_DIR" && cd "$TARGET_DIR" && pwd -P)"
 PROJECT_NAME="${PROJECT_NAME:-$(basename "$TARGET_DIR")}"
 
 # Scaffold only into an empty directory; existing projects use bind-project.sh.
-if [ -n "$(ls -A "$TARGET_DIR" | grep -vx '.git' || true)" ]; then
+entries="$(ls -A "$TARGET_DIR")"
+if [ -n "$(printf '%s\n' "$entries" | grep -vxF .git || true)" ]; then
     echo "Error: '$TARGET_DIR' is not empty; bind an existing project with bind-project.sh instead." >&2
     exit 1
 fi
