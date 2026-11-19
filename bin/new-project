@@ -6,7 +6,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TARGET_DIR=""
 STACK="python-uv"
 RUNTIME="all"
-FORCE=false
 PROJECT_NAME=""
 
 usage() {
@@ -16,13 +15,12 @@ Usage: ./bin/new-project <TARGET_DIR> [OPTIONS]
 Scaffold a new project with Lean Harness standard verbs, stack adapters, and agent bindings.
 
 Arguments:
-  TARGET_DIR                   Path to target project directory (required)
+  TARGET_DIR                   Empty directory to create the project in (an existing .git is kept)
 
 Options:
   --stack <stack>              Technology stack: python-uv, ts-bun, go, rust (default: python-uv)
   --runtime <omp|claude|all>   Target Agent runtime to bind (default: all)
   --name <name>                Project name (default: basename of TARGET_DIR)
-  --force                      Overwrite existing directory if non-empty
   -h, --help                   Show this help message
 
 Examples:
@@ -50,10 +48,6 @@ while [ $# -gt 0 ]; do
             PROJECT_NAME="$2"
             shift 2
             ;;
-        --force)
-            FORCE=true
-            shift
-            ;;
         -h|--help)
             usage
             ;;
@@ -78,19 +72,20 @@ if [ -z "$TARGET_DIR" ]; then
     usage
 fi
 
-TARGET_DIR="$(mkdir -p "$TARGET_DIR" && cd "$TARGET_DIR" && pwd -P)"
-PROJECT_NAME="${PROJECT_NAME:-$(basename "$TARGET_DIR")}"
-
-# Check directory contents
-if [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ] && [ "$FORCE" = false ]; then
-    echo "Error: Target directory '$TARGET_DIR' is not empty. Use --force to overwrite." >&2
-    exit 1
-fi
-
 ADAPTER_SRC="$ROOT_DIR/templates/adapters/${STACK}.mk"
 if [ ! -f "$ADAPTER_SRC" ]; then
     echo "Error: Unsupported stack '${STACK}'. Available adapters:" >&2
     ls "$ROOT_DIR/templates/adapters" | sed 's/\.mk$//; s/^/  - /' >&2
+    exit 1
+fi
+
+TARGET_DIR="$(mkdir -p "$TARGET_DIR" && cd "$TARGET_DIR" && pwd -P)"
+PROJECT_NAME="${PROJECT_NAME:-$(basename "$TARGET_DIR")}"
+
+# Scaffold only into an empty directory; existing projects use bind-project.sh.
+entries="$(ls -A "$TARGET_DIR")"
+if [ -n "$(printf '%s\n' "$entries" | grep -vxF .git || true)" ]; then
+    echo "Error: '$TARGET_DIR' is not empty; bind an existing project with bind-project.sh instead." >&2
     exit 1
 fi
 

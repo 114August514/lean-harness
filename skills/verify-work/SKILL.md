@@ -53,8 +53,9 @@ description: 为关键 Claim 和 Acceptance criteria 选择并执行最低成本
    不把 Evidence 等同于自动化测试，也不默认新增永久测试——是否保留
    测试按 `policy/working-contract.md` 的"测试与验证"判断；新增的回归
    测试先确认它在修复前会失败。项目提供 `make check` 一类统一入口时，
-   变化收敛后用它为当前工件产生 Evidence；`make audit` 一类变更扫描
-   只提供审查线索，不替代 Evidence。
+   它通常是代码变化收敛后成本最低的充分 Evidence；不在其覆盖范围内的
+   变化（如纯文档）不必为此运行。`make audit` 一类变更扫描只提供审查
+   线索，不替代 Evidence。
 
 3. **执行并记录。** 每条 Evidence 至少记录：
 

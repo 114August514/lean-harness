@@ -3,49 +3,71 @@
 #
 # Usage: bin/audit [BASE]
 #
-# BASE defaults to the merge-base with the default branch: a feature branch
-# is audited as a whole, the default branch itself only for uncommitted
-# changes. An explicit BASE must exist in this clone.
+# BASE defaults to the merge-base of HEAD with the first of origin/HEAD,
+# origin/main, origin/master, main and master that exists: a branch is
+# audited as a whole, the default branch itself only for uncommitted changes.
+# When none of them exists, or HEAD shares no visible history with it
+# (shallow clone), pass BASE explicitly.
 #
-# Exit status: 0 = no critical finding (warnings allowed), 1 = a critical
-# boundary was touched and needs deliberate review, 2 = usage error.
+# Untracked files count as added in full. Checked:
+#   critical  migrations/ or contracts/ at any depth, api/ or schema/ at the
+#             repository root, *.proto, openapi.* or swagger.* files;
+#             secret-like files (.env, private keys, credentials.json)
+#   warning   dependency manifests and lockfiles; in test files (paths
+#             containing "test" or ".spec."): removed assertions and added
+#             skip markers; in any text file: added empty exception handlers
+# Not checked: tests that live in other files, such as Rust #[cfg(test)]
+# modules.
+#
+# Exit status: 0 = no critical finding (warnings allowed), 1 = critical
+# finding that needs deliberate review, 2 = no usable base.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT_DIR"
 
+no_base() {
+    echo "error: $*" >&2
+    exit 2
+}
+
 default_base() {
-    local candidate
+    local candidate merge_base
     if ! git rev-parse --verify --quiet HEAD >/dev/null; then
         git hash-object -t tree /dev/null # no commits yet: everything is new
         return
     fi
-    for candidate in "$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)" origin/main main; do
-        if [ -n "$candidate" ] && git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null; then
-            git merge-base HEAD "$candidate"
+    for candidate in "$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD || true)" \
+        origin/main origin/master main master; do
+        if [ -z "$candidate" ] || ! git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null; then
+            continue
+        fi
+        if merge_base="$(git merge-base HEAD "$candidate")"; then
+            echo "$merge_base"
             return
         fi
+        no_base "HEAD shares no visible history with $candidate (shallow clone?); fetch full history or pass BASE"
     done
-    git rev-parse HEAD
+    no_base "no default branch (origin/HEAD, origin/main, origin/master, main, master); pass BASE"
 }
 
-if [ -n "${1:-}" ]; then
+if [ $# -gt 1 ]; then
+    no_base "usage: bin/audit [BASE]"
+elif [ -n "${1:-}" ]; then
     base="$1"
-    if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
-        echo "error: base '$base' is not a commit in this clone (shallow clone? fetch full history)" >&2
-        exit 2
-    fi
+    git rev-parse --verify --quiet "${base}^{commit}" >/dev/null ||
+        no_base "base '$base' is not a commit in this clone (shallow clone? fetch full history)"
 else
-    base="$(default_base)"
+    base="$(default_base)" || exit 2
 fi
 
 echo "=== Lean Harness Change Audit ==="
 echo "Base: $base"
 
-changed="$({
-    git diff --name-only "$base"
-    git ls-files --others --exclude-standard
-} | sort -u)"
+# -z prints real paths; Git would otherwise quote names with non-ASCII characters.
+tracked="$(git diff --name-only -z "$base" | tr '\0' '\n')" || no_base "cannot diff against $base"
+untracked="$(git ls-files -z --others --exclude-standard | tr '\0' '\n')"
+changed="$(printf '%s\n%s\n' "$tracked" "$untracked" | sed '/^$/d' | sort -u)"
 if [ -z "$changed" ]; then
     echo "No changes against the base."
     exit 0
@@ -59,15 +81,28 @@ show() {
     printf '%s\n' "$1" | sed -n '1,10s/^/    /p'
 }
 
+# Untracked regular text files (not symlinks) whose path matches the ERE $1,
+# every line prefixed with "+" like the added lines of a diff.
+untracked_as_added() {
+    local file
+    while IFS= read -r file; do
+        if [ -n "$file" ] && [[ $file =~ $1 ]] && [ -f "./$file" ] && [ ! -L "./$file" ] &&
+            grep -Iq . "./$file"; then
+            sed 's/^/+/' "./$file"
+        fi
+    done <<<"$untracked"
+}
+
 echo ""
 echo "--- Boundaries ---"
-boundary="$(printf '%s\n' "$changed" | grep -E '(^|/)migrations/|^(contracts|api|schema)/' || true)"
+boundary="$(printf '%s\n' "$changed" |
+    grep -E '(^|/)(migrations|contracts)/|^(api|schema)/|\.proto$|(^|/)(openapi|swagger)\.(ya?ml|json)$' || true)"
 if [ -n "$boundary" ]; then
-    echo "  [CRITICAL] migration or contract paths changed; review compatibility and rollback:"
+    echo "  [CRITICAL] migration or contract files changed; review compatibility and rollback:"
     show "$boundary"
     critical=$((critical + 1))
 else
-    echo "  [PASS] no migration or contract paths"
+    echo "  [PASS] no migration or contract files"
 fi
 
 deps="$(printf '%s\n' "$changed" | grep -E '(^|/)(package\.json|package-lock\.json|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock|pyproject\.toml|uv\.lock|requirements[^/]*\.txt|Cargo\.(toml|lock)|go\.(mod|sum))$' || true)"
@@ -94,21 +129,29 @@ fi
 
 echo ""
 echo "--- Tests ---"
-test_diff="$(git diff "$base" -- '*test*')"
-removed="$(printf '%s\n' "$test_diff" | grep -E '^-' | grep -vE '^---' | grep -E 'assert|expect' || true)"
+test_changes="$(
+    git diff "$base" -- '*test*' '*.spec.*'
+    untracked_as_added 'test|\.spec\.'
+)"
+removed="$(printf '%s\n' "$test_changes" | grep -E '^-' | grep -vE '^---' |
+    grep -E 'assert|expect|(^|[^[:alnum:]_])t\.(Error|Fatal)' || true)"
 if [ -n "$removed" ]; then
     echo "  [WARN] test assertions removed or changed:"
     show "$removed"
     warnings=$((warnings + 1))
 fi
-skipped="$(printf '%s\n' "$test_diff" | grep -E '^\+' | grep -vE '^\+\+\+' |
+skipped="$(printf '%s\n' "$test_changes" | grep -E '^\+' | grep -vE '^\+\+\+' |
     grep -E '@pytest\.mark\.(skip|xfail)|\.skip\(|(^|[^[:alnum:]_])xit\(|@Ignore|t\.Skip|#\[ignore\]' || true)"
 if [ -n "$skipped" ]; then
     echo "  [WARN] skipped tests added:"
     show "$skipped"
     warnings=$((warnings + 1))
 fi
-swallowed="$(git diff "$base" |
+all_changes="$(
+    git diff "$base"
+    untracked_as_added '.'
+)"
+swallowed="$(printf '%s\n' "$all_changes" |
     grep -E -A1 '^\+.*(except[^:]*:|catch[[:space:]]*(\([^)]*\))?[[:space:]]*\{)[[:space:]]*$' |
     grep -E '^\+[[:space:]]*(pass|return|continue|//.*|\})[[:space:]]*$' || true)"
 if [ -n "$swallowed" ]; then
@@ -117,8 +160,9 @@ if [ -n "$swallowed" ]; then
     warnings=$((warnings + 1))
 fi
 if [ -z "$removed$skipped$swallowed" ]; then
-    echo "  [PASS] no removed assertions, new skips or empty handlers"
+    echo "  [PASS] test files: no removed assertions or new skips; no empty exception handlers"
 fi
+echo "  [INFO] not covered: tests outside test-named files (e.g. Rust #[cfg(test)] modules)"
 
 echo "-----------------------------------"
 if [ "$critical" -gt 0 ]; then

@@ -1,6 +1,6 @@
 # Stage 3–4：工程骨架、垂直切片与测试策略
 
-本参考对应 [SKILL.md](../SKILL.md) 的 Stage 3「发射曳光弹骨架」与 Stage 4「垂直切片与 TDD」，
+本参考对应 [SKILL.md](../SKILL.md) 的 Stage 3「发射曳光弹骨架」与 Stage 4「垂直切片与测试」，
 只定义产物质量；实现与验证按项目自己的流程进行。
 
 ## Stage 3：发射曳光弹骨架
@@ -58,7 +58,7 @@ Twelve-Factor 的可移植要点适合服务型应用，也可按项目形态取
 **工程基线足够好**：干净环境能按文档 setup/dev/check/build；CI 复用相同入口；
 依赖与配置来源显式；一个真实链路已跨过主要技术接缝。
 
-## Stage 4：垂直切片与 TDD
+## Stage 4：垂直切片与测试
 
 垂直切片是“一小段可观察能力”，不是技术层任务。它从一个用户/操作者输入穿过必要层次，
 产生可验收结果，并能在合入后独立存在。
@@ -81,7 +81,7 @@ Twelve-Factor 的可移植要点适合服务型应用，也可按项目形态取
 先做能降低最高不确定性、同时仍可端到端闭合的薄片。不要把“风险优先”误解为先建一套
 未来基础设施；实验若不能成为可交付行为，应明确是 throwaway spike。
 
-**产物**：生产行为及伴生测试，必要时同步更新 contract/spec/ADR/runbook。前端实现质量转
+**产物**：生产行为，以及与风险相称的验证（新的业务规则或修过的缺陷通常值得一个行为测试），必要时同步更新 contract/spec/ADR/runbook。前端实现质量转
 `skill://frontend-engineering`，API、数据和运行行为转 `skill://backend-engineering`，文档转
 `skill://project-docs`。
 
