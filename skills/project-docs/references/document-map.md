@@ -43,7 +43,7 @@ spec 应记录问题、用户/场景、范围与非目标、可观察的验收�
 
 而“体验友好”“性能良好”无法直接验收，应改成场景与边界。
 
-Lean Harness 已有 `templates/project-skeleton/docs/spec.md`，它还承担 shaping、主旅程、非目标、曳光弹、REQ-ID 和垂直切片跟踪。项目已经采用它时继续维护该文件；本 skill 的通用模板只用于没有既有格式的仓库。`docs/walkthrough.md` 是交付状态与人工验收入口，不是长期需求或设计决定的事实源。
+Lean Harness 脚手架生成的 `docs/spec.md` 还承担 shaping、主旅程、非目标、曳光弹、REQ-ID 和垂直切片跟踪。项目已经采用它时继续维护该文件；本 skill 的通用模板只用于没有既有格式的仓库。`docs/walkthrough.md` 是交付状态与人工验收入口，不是长期需求或设计决定的事实源。
 
 ## 4. ADR：为什么这样设计
 

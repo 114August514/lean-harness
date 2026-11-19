@@ -120,7 +120,7 @@ LLM judge 也会变化，不能让它成为唯一真相；关键样本保留人�
 
 不要只挑候选版本表现好的例子，也不要因为平均分上升就忽略高风险样本退化。OpenAI 建议在生产中固定模型快照；如果供应商只给滚动别名，就把实际返回的模型标识记录下来并提高回归频率。[OpenAI Prompt Engineering](https://platform.openai.com/docs/guides/prompt-engineering)
 
-测试不得调用真实公网 API；仓库回归使用保存的 fixture/fake 验证渲染、解析、校验和错误路径。需要真实模型的 eval 是受控实验或发布检查，单独预算、脱敏并记录身份，不混入普通离线测试。工作流程遵循 `policy/always.md` 与 `skill://verify-work`。
+测试不得调用真实公网 API；仓库回归使用保存的 fixture/fake 验证渲染、解析、校验和错误路径。需要真实模型的 eval 是受控实验或发布检查，单独预算、脱敏并记录身份，不混入普通离线测试。
 
 ## 来源
 

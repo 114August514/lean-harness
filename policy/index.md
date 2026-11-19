@@ -6,10 +6,8 @@
 
 - [工作契约](working-contract.md)
 - [决策边界](decision-boundaries.md)
-- [核心横切规则](always.md)
-- [双轨分流策略](triage.md)
 - [AI失败模式清单](ai-failure-modes.md)
-- [防污染自进化协议](evolution.md)
+- [规则演进协议](evolution.md)
 
 ## 核心原则
 
@@ -74,6 +72,14 @@
 - 前端工程与交互文案（错误提示、确认对话框、Toast、表单反馈）：`frontend-engineering`
 - API 契约、错误模型、鉴权、迁移、日志与可观测性：`backend-engineering`
 - 程序里调用 LLM 的 prompt：`llm-prompts-in-code`
+
+审查改动或收尾自查时，阅读：
+
+- `ai-failure-modes.md`
+
+修改 policy、skills 或 Harness 工具与模板本身时，阅读：
+
+- `evolution.md`
 
 准备宣称完成或停止时，阅读：
 

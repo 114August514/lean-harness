@@ -57,15 +57,15 @@ interface CoreEntity {
 
 ## 6. 垂直切片清单与进展 (Vertical Slices & Progress)
 
-> **Agent 执行铁律**：
-> 1. **单切片推进**：严禁同时修改多个切片。一次只领跑一个切片；
-> 2. **先红后绿**：每个切片先写伴生失败测试，再写生产代码，直到 `make check` 全绿；
-> 3. **原子提交**：每个切片通过 `make check` 后，打勾 `[x]` 并立即执行切片原子 Git Commit (`git commit -m "feat(slice-N): ..."` )；
-> 4. **晨报同步**：无人值守或阶段结束前，将进展同步至 `docs/walkthrough.md`。
+> **切片约定**：
+> 1. 一次推进一个切片，每片交付可观察的端到端结果；
+> 2. 切片完成后 `make check` 通过，再勾选 `[x]` 并提交（如 `git commit -m "feat(slice-N): ..."`）；
+> 3. 修复缺陷时，新增的回归测试先确认在修复前失败；
+> 4. 阶段结束或无人值守运行结束前，把进展写进 `docs/walkthrough.md`。
 
 - [ ] **Slice 0 (Tracer Bullet)**: 初始极简骨架连通，`make check` 绿，`make demo` 打印基础响应。
 - [ ] **Slice 1**: 核心数据持久化与存储（支持种子数据加载 `make seed`）。
-- [ ] **Slice 2**: 核心业务规则与主旅程 API 接口（先红后绿测试）。
+- [ ] **Slice 2**: 核心业务规则与主旅程 API 接口（附行为测试）。
 - [ ] **Slice 3**: 异常边界处理、输入校验与日志/错误提示。
 - [ ] **Slice 4**: 用户端交互/CLI/前端页面与最终 30 秒 Demo 交付。
 

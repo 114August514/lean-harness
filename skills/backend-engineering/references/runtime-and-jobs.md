@@ -38,7 +38,9 @@ logger.error({ err, jobId, attempt }, "job execution failed");
 ```
 
 ```python
-logger.error("job execution failed", extra={"job_id": job_id, "attempt": attempt}, exc_info=True)
+logger.error(
+    "job execution failed", extra={"job_id": job_id, "attempt": attempt}, exc_info=True
+)
 ```
 
 生产代码使用项目已有的 structured logger / telemetry SDK；框架 instrumentation 和语义约定随版本

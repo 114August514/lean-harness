@@ -1,8 +1,7 @@
 # Stage 5：Demo、发布与运行
 
-本参考沿用 [`workflow/lifecycle.md`](../../../workflow/lifecycle.md) 的 Stage 5「种子装配、Demo 交付与差量审计」，
-并补足发布后运行。验收编排使用 `skill://finish-work`，验证使用 `skill://verify-work`，审查使用
-`skill://review-work`；本文只定义交付物应达到的质量。
+本参考对应 [SKILL.md](../SKILL.md) 的 Stage 5「Demo 与交付」，并补足发布后运行。本文只定义
+交付物应达到的质量；验收、验证与审查按项目自己的流程进行。
 
 ## Demo 与交付不是同一件事
 

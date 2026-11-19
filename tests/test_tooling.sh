@@ -1,133 +1,218 @@
 #!/usr/bin/env bash
+# Behavior tests for bin/doctor, bin/audit, bind-project.sh and the stack
+# templates scaffolded by bin/new-project.
+#
+# Scaffolded stacks need uv, bun, go and cargo plus network access for their
+# dependencies. Locally a missing toolchain is reported as SKIP; in CI
+# (CI=true) it is a failure.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$ROOT_DIR"
 
-echo "=== Running Lean Harness Tooling Test Suite ==="
+export GIT_AUTHOR_NAME="Lean Harness Test" GIT_AUTHOR_EMAIL="test@example.invalid"
+export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
-PASSES=0
-FAILS=0
+passes=0
+fails=0
+skips=0
 
-test_pass() {
+pass() {
     echo "  [PASS] $1"
-    PASSES=$((PASSES + 1))
+    passes=$((passes + 1))
 }
-
-test_fail() {
+fail() {
     echo "  [FAIL] $1"
-    FAILS=$((FAILS + 1))
+    fails=$((fails + 1))
+    if [ -n "${2:-}" ]; then
+        tail -n 30 "$2" | sed 's/^/      /'
+    fi
+}
+skip() {
+    if [ "${CI:-}" = true ]; then
+        fail "$1 (required in CI)"
+    else
+        echo "  [SKIP] $1"
+        skips=$((skips + 1))
+    fi
+}
+# Run a command quietly and return its exit status without tripping set -e.
+status_of() {
+    local log="$1"
+    shift
+    set +e
+    "$@" >"$log" 2>&1
+    local status=$?
+    set -e
+    return "$status"
 }
 
-# 1. Test bin/doctor in Core Repo
-echo "[1/4] Testing bin/doctor in core repo..."
-if ./bin/doctor >/dev/null 2>&1; then
-    test_pass "bin/doctor passes on core repository"
+work="$(mktemp -d "${TMPDIR:-/tmp}/harness-tooling-XXXXXX")"
+trap 'rm -rf -- "$work"' EXIT
+log="$work/last.log"
+
+new_repo() {
+    git init -q -b main "$1"
+    git -C "$1" commit -q --allow-empty -m init
+}
+
+echo "[1/4] bin/doctor"
+if status_of "$log" ./bin/doctor; then
+    pass "doctor reports HEALTHY on this repository"
 else
-    test_fail "bin/doctor failed on core repository"
+    fail "doctor failed on this repository" "$log"
 fi
 
-# 2. Test bin/audit in Core Repo
-echo "[2/4] Testing bin/audit in core repo..."
-if ./bin/audit >/dev/null 2>&1; then
-    test_pass "bin/audit runs cleanly on current diff"
+echo "[2/4] bin/audit"
+repo="$work/audit"
+new_repo "$repo"
+mkdir "$repo/bin"
+cp bin/audit "$repo/bin/audit"
+git -C "$repo" add bin/audit
+git -C "$repo" commit -q -m "add audit"
+audit() { status_of "$log" "$repo/bin/audit" "$@"; }
+
+if audit; then pass "clean tree passes"; else fail "clean tree failed" "$log"; fi
+printf 'x\n' >"$repo/notes.md"
+if audit; then pass "ordinary change passes"; else fail "ordinary change failed" "$log"; fi
+mkdir -p "$repo/db/migrations"
+printf 'select 1;\n' >"$repo/db/migrations/001.sql"
+if audit; then
+    fail "migration change passed"
+elif grep -q 'db/migrations/001.sql' "$log"; then
+    pass "migration change fails and names the file"
 else
-    test_fail "bin/audit failed on current diff"
+    fail "migration change failed without naming the file" "$log"
 fi
+rm -r "$repo/db"
+printf 'KEY=\n' >"$repo/.env.example"
+if audit; then pass ".env.example is not treated as a secret"; else fail ".env.example flagged" "$log"; fi
+printf 'KEY=1\n' >"$repo/.env"
+if audit; then fail ".env passed"; else pass ".env fails"; fi
+rm "$repo/.env" "$repo/.env.example" "$repo/notes.md"
 
-# 3. Test bind-project.sh in standalone repo
-echo "[3/4] Testing bind-project.sh in standalone repo..."
-TMP_BIND_DIR="$(mktemp -d /tmp/harness-bind-XXXXXX)"
-trap 'rm -rf "$TMP_BIND_DIR"' EXIT
+git -C "$repo" switch -q -c feature
+mkdir "$repo/migrations"
+printf 'select 1;\n' >"$repo/migrations/001.sql"
+git -C "$repo" add migrations
+git -C "$repo" commit -q -m "add migration"
+printf 'y\n' >"$repo/later.md"
+git -C "$repo" add later.md
+git -C "$repo" commit -q -m "later change"
+if audit; then
+    fail "branch audit missed a migration committed before HEAD~1"
+else
+    pass "branch audit covers every commit since the merge-base"
+fi
+if audit no-such-ref; then status=0; else status=$?; fi
+if [ "$status" -eq 2 ]; then pass "unknown base is a usage error"; else fail "unknown base exited $status" "$log"; fi
 
-git -C "$TMP_BIND_DIR" init -q -b main
-if ./bind-project.sh "$TMP_BIND_DIR" --runtime all --dev >/dev/null 2>&1; then
-    if [ -f "$TMP_BIND_DIR/.omp/config.yml" ] && [ -d "$TMP_BIND_DIR/.claude/skills" ]; then
-        test_pass "bind-project.sh binds .omp and .claude correctly"
+echo "[3/4] bind-project.sh"
+proj="$work/bind"
+new_repo "$proj"
+if status_of "$log" ./bind-project.sh "$proj" --runtime all --dev; then
+    if [ -f "$proj/.omp/config.yml" ] && [ -f "$proj/.omp/mcp.json" ] &&
+        grep -qxF "@$ROOT_DIR/.omp/AGENTS.md" "$proj/.omp/AGENTS.md" &&
+        grep -qxF "@$ROOT_DIR/.omp/AGENTS.md" "$proj/CLAUDE.md" &&
+        [ "$(readlink "$proj/.claude/skills/finish-work")" = "$ROOT_DIR/skills/finish-work" ] &&
+        [ ! -e "$proj/.claude/skills/_shared" ]; then
+        pass "binds OMP and Claude Code by reference"
     else
-        test_fail "bind-project.sh missing .omp or .claude files"
+        fail "binding files are incomplete"
     fi
 else
-    test_fail "bind-project.sh failed in standalone repo"
+    fail "bind --dev failed" "$log"
 fi
-rm -rf "$TMP_BIND_DIR"
-
-# 4. Test bin/new-project scaffolding for all stacks
-echo "[4/4] Testing bin/new-project scaffolding & runnable skeletons..."
-STACKS=("python-uv" "ts-bun" "go" "rust")
-
-for stack in "${STACKS[@]}"; do
-    TMP_PROJ_DIR="$(mktemp -d /tmp/harness-proj-${stack}-XXXXXX)"
-    
-    if ./bin/new-project "$TMP_PROJ_DIR" --stack "$stack" --runtime all >/dev/null 2>&1; then
-        # Check standard harness files
-        if [ -f "$TMP_PROJ_DIR/Makefile" ] && \
-           [ -f "$TMP_PROJ_DIR/stack.mk" ] && \
-           [ -f "$TMP_PROJ_DIR/.gitignore" ] && \
-           [ -f "$TMP_PROJ_DIR/docs/spec.md" ] && \
-           [ -f "$TMP_PROJ_DIR/docs/walkthrough.md" ] && \
-           [ -f "$TMP_PROJ_DIR/data/demo_seeds.json" ] && \
-           [ -x "$TMP_PROJ_DIR/bin/doctor" ]; then
-            test_pass "Scaffolded structure complete for $stack"
-        else
-            test_fail "Scaffolded structure missing essential files for $stack"
-        fi
-
-        # Check stack-specific runnable skeleton
-        case "$stack" in
-            python-uv)
-                if [ -f "$TMP_PROJ_DIR/pyproject.toml" ] && [ -f "$TMP_PROJ_DIR/src/app.py" ]; then
-                    test_pass "Tracer skeleton files present for python-uv"
-                    # Run make check inside the scaffolded project
-                    if make -C "$TMP_PROJ_DIR" check >/dev/null 2>&1; then
-                        test_pass "make check passes out-of-the-box for python-uv"
-                    else
-                        test_fail "make check failed out-of-the-box for python-uv"
-                    fi
-                else
-                    test_fail "Tracer skeleton missing for python-uv"
-                fi
-                ;;
-            ts-bun)
-                if [ -f "$TMP_PROJ_DIR/package.json" ] && [ -f "$TMP_PROJ_DIR/src/index.ts" ]; then
-                    test_pass "Tracer skeleton files present for ts-bun"
-                else
-                    test_fail "Tracer skeleton missing for ts-bun"
-                fi
-                ;;
-            go)
-                if [ -f "$TMP_PROJ_DIR/go.mod" ] && [ -f "$TMP_PROJ_DIR/main.go" ]; then
-                    test_pass "Tracer skeleton files present for go"
-                else
-                    test_fail "Tracer skeleton missing for go"
-                fi
-                ;;
-            rust)
-                if [ -f "$TMP_PROJ_DIR/Cargo.toml" ] && [ -f "$TMP_PROJ_DIR/src/main.rs" ]; then
-                    test_pass "Tracer skeleton files present for rust"
-                else
-                    test_fail "Tracer skeleton missing for rust"
-                fi
-                ;;
-        esac
-
-        # Verify doctor in consumer project
-        if (cd "$TMP_PROJ_DIR" && ./bin/doctor >/dev/null 2>&1); then
-            test_pass "bin/doctor reports HEALTHY in consumer project ($stack)"
-        else
-            test_fail "bin/doctor failed in consumer project ($stack)"
-        fi
+before="$(cat "$proj/CLAUDE.md" "$proj/.omp/AGENTS.md")"
+if status_of "$log" ./bind-project.sh "$proj" --runtime all --dev; then
+    fail "second bind overwrote an existing binding"
+elif [ "$(cat "$proj/CLAUDE.md" "$proj/.omp/AGENTS.md")" = "$before" ]; then
+    pass "second bind refuses and leaves files untouched"
+else
+    fail "second bind modified files before refusing"
+fi
+if git describe --tags --exact-match >/dev/null 2>&1; then
+    echo "  [INFO] HEAD is exactly tagged; release-mode refusal not exercised"
+else
+    proj="$work/bind-release"
+    new_repo "$proj"
+    if status_of "$log" ./bind-project.sh "$proj"; then
+        fail "release mode bound an untagged checkout"
+    elif [ ! -e "$proj/.omp" ]; then
+        pass "release mode refuses an untagged checkout"
     else
-        test_fail "bin/new-project failed for stack $stack"
+        fail "release mode wrote files before refusing"
+    fi
+fi
+
+echo "[4/4] bin/new-project stacks"
+# stack | required tools | formatting break | failing test file | its content
+probe_fmt() {
+    case "$1" in
+        python-uv) printf 'x=1\n' >>"$2/src/app.py" ;;
+        ts-bun) printf 'export const probe  =  1;\n' >>"$2/src/index.ts" ;;
+        go) printf 'var  probe = 1\n' >>"$2/main.go" ;;
+        rust) printf 'fn  probe() {}\n' >>"$2/src/main.rs" ;;
+    esac
+}
+probe_test() {
+    case "$1" in
+        python-uv) printf 'def test_probe() -> None:\n    assert False\n' >"$2/tests/test_probe.py" ;;
+        ts-bun) printf 'import { expect, test } from "bun:test";\ntest("probe", () => expect(1).toBe(2));\n' >"$2/tests/probe.test.ts" ;;
+        go) printf 'package main\n\nimport "testing"\n\nfunc TestProbe(t *testing.T) { t.Fatal("probe") }\n' >"$2/probe_test.go" ;;
+        rust) mkdir -p "$2/tests" && printf '#[test]\nfn probe() {\n    panic!("probe");\n}\n' >"$2/tests/probe.rs" ;;
+    esac
+}
+for stack in python-uv ts-bun go rust; do
+    case "$stack" in
+        python-uv) tools="uv" ;;
+        ts-bun) tools="bun" ;;
+        go) tools="go gofmt" ;;
+        rust) tools="cargo" ;;
+    esac
+    missing=""
+    for tool in $tools; do
+        command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+    done
+    if [ -n "$missing" ]; then
+        skip "$stack: missing$missing"
+        continue
     fi
 
-    rm -rf "$TMP_PROJ_DIR"
+    dir="$work/proj-$stack"
+    if ! status_of "$log" ./bin/new-project "$dir" --stack "$stack" --runtime omp; then
+        fail "$stack: new-project failed" "$log"
+        continue
+    fi
+    if status_of "$log" make -C "$dir" setup && status_of "$log" make -C "$dir" check &&
+        status_of "$log" make -C "$dir" seed; then
+        pass "$stack: setup, check and seed pass"
+    else
+        fail "$stack: scaffold gates failed" "$log"
+        continue
+    fi
+    if status_of "$log" "$dir/bin/doctor"; then
+        pass "$stack: doctor HEALTHY"
+    else
+        fail "$stack: doctor failed" "$log"
+    fi
+
+    # The gates must actually fail on broken code.
+    probe_fmt "$stack" "$dir"
+    if status_of "$log" make -C "$dir" fmt-check; then
+        fail "$stack: fmt-check passed unformatted code"
+    else
+        pass "$stack: fmt-check rejects unformatted code"
+    fi
+    git -C "$dir" checkout -q -- .
+    probe_test "$stack" "$dir"
+    if status_of "$log" make -C "$dir" test; then
+        fail "$stack: test passed a failing test"
+    else
+        pass "$stack: test rejects a failing test"
+    fi
 done
 
 echo "-------------------------------------------------------"
-echo "Tooling tests complete: $PASSES passed, $FAILS failed."
-if [ "$FAILS" -eq 0 ]; then
-    exit 0
-else
-    exit 1
-fi
+echo "Tooling tests: $passes passed, $fails failed, $skips skipped."
+[ "$fails" -eq 0 ]

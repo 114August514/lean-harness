@@ -1,32 +1,29 @@
-"""Tracer Bullet application entry point."""
+"""Tracer bullet: load the demo seed data and print a summary."""
 
 import json
+import sys
 from pathlib import Path
 
-
-def load_seeds() -> list[dict]:
-    seed_path = Path("data/demo_seeds.json")
-    if seed_path.exists():
-        try:
-            return json.loads(seed_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return []
-    return []
+SEED_PATH = Path("data/demo_seeds.json")
 
 
-def run_demo() -> None:
+def load_seeds(path: Path = SEED_PATH) -> list[dict[str, object]]:
+    """Return the seed items; a missing or malformed file is an error."""
+    items = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(items, list):
+        raise TypeError(f"{path}: expected a JSON array")
+    return items
+
+
+def main(args: list[str]) -> None:
     seeds = load_seeds()
-    print("=" * 55)
-    print("🚀 App Tracer Bullet - Ready for Development")
-    print(f"📦 Preloaded Seeds: {len(seeds)} items")
+    if args == ["seed"]:
+        print(f"Loaded {len(seeds)} seed items from {SEED_PATH}")
+        return
+    print(f"Tracer bullet ready: {len(seeds)} seed items")
     for item in seeds[:3]:
-        print(f"   - [{item.get('id', 'N/A')}] {item.get('name', 'Item')}")
-    print("=" * 55)
-
-
-def add(a: int, b: int) -> int:
-    return a + b
+        print(f"  - [{item.get('id', '?')}] {item.get('title', '')}")
 
 
 if __name__ == "__main__":
-    run_demo()
+    main(sys.argv[1:])

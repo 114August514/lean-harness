@@ -1,6 +1,6 @@
 # 存量项目接入、复用与工程分寸
 
-存量项目不重走一遍“新项目五阶段”。沿用 [`workflow/lifecycle.md`](../../../workflow/lifecycle.md)：
+存量项目不重走一遍“新项目五阶段”。按 [SKILL.md](../SKILL.md) 的五阶段：
 先做 Stage 1 的当前变化定界；只有契约/不可逆决定受影响才进 Stage 2；通常跳过 Stage 3；
 从下一条 Stage 4 垂直切片开始改善，最后按 Stage 5 交付。
 
@@ -19,8 +19,8 @@ reverse engineering、配置管理和持续交付列为维护核心主题；因�
 6. **风险热点**：频繁变化、故障历史、缺测试且后果高、只有一人理解的区域。
 
 优先读仓库中的 README、manifest/lockfile、CI、入口、测试、migration、部署配置和近期真实变更；
-文档与代码冲突时记录冲突，不默默选一边。需要回溯行为时用 `skill://investigate-question`；
-出现故障症状用 `skill://debug-problem`。
+文档与代码冲突时记录冲突，不默默选一边。需要回溯行为时先做有边界的调查，出现故障症状
+先诊断再改（项目有 `investigate-question`、`debug-problem` 这类流程 skill 时用它们）。
 
 **产物**：一页 system map（可用 C4 Context/Container）、经过实跑确认的命令表、契约/状态清单、
 风险排序和“下一条最安全有价值切片”。项目文档模板转 `skill://project-docs`。
@@ -68,7 +68,7 @@ reverse engineering、配置管理和持续交付列为维护核心主题；因�
 - 图、文档和检查项没有已知读者，也不会改变决定。
 
 这不是禁止抽象。相同概念已重复变化、替换边界真实存在、或测试困难暴露耦合时，抽象是在降低整体复杂度。
-遵循 `policy/working-contract.md`：最小化系统整体复杂度，而非当前 patch 行数。
+目标是最小化系统整体复杂度，而非当前 patch 行数。
 
 ## 复用判断
 

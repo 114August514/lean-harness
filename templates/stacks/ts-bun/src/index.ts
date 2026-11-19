@@ -1,32 +1,30 @@
-import { readFileSync, existsSync } from "fs";
+import { readFileSync } from "node:fs";
 
-export function loadSeeds(): Array<Record<string, unknown>> {
-  const seedPath = "data/demo_seeds.json";
-  if (existsSync(seedPath)) {
-    try {
-      return JSON.parse(readFileSync(seedPath, "utf-8"));
-    } catch {
-      return [];
-    }
-  }
-  return [];
+const SEED_PATH = "data/demo_seeds.json";
+
+export type SeedItem = { id?: string; title?: string };
+
+/** Parses a JSON array of seed items. */
+export function loadSeeds(text: string): SeedItem[] {
+	const items: unknown = JSON.parse(text);
+	if (!Array.isArray(items)) {
+		throw new Error("expected a JSON array");
+	}
+	return items as SeedItem[];
 }
 
-export function runDemo(): void {
-  const seeds = loadSeeds();
-  console.log("=======================================================");
-  console.log("🚀 TypeScript + Bun Tracer Bullet Ready");
-  console.log(`📦 Preloaded Seeds: ${seeds.length} items`);
-  seeds.slice(0, 3).forEach((item) => {
-    console.log(`   - [${item.id ?? "N/A"}] ${item.name ?? "Item"}`);
-  });
-  console.log("=======================================================");
-}
-
-export function add(a: number, b: number): number {
-  return a + b;
+function main(args: string[]): void {
+	const seeds = loadSeeds(readFileSync(SEED_PATH, "utf-8"));
+	if (args[0] === "seed") {
+		console.log(`Loaded ${seeds.length} seed items from ${SEED_PATH}`);
+		return;
+	}
+	console.log(`Tracer bullet ready: ${seeds.length} seed items`);
+	for (const item of seeds.slice(0, 3)) {
+		console.log(`  - [${item.id ?? "?"}] ${item.title ?? ""}`);
+	}
 }
 
 if (import.meta.main) {
-  runDemo();
+	main(process.argv.slice(2));
 }
